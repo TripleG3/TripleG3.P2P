@@ -77,13 +77,13 @@ public enum SerializationProtocol : short
 }
 
 [Udp]
-public record Person([Udp(1)] string Name, [Udp(2)] int Age, [Udp(3)] Address Address)
+public record Person([property: Udp(1)] string Name, [property: Udp(2)] int Age, [property: Udp(3)] Address Address)
 {
     public static Person Empty { get; } = new(string.Empty, 0, Address.Empty);
 }
 
 [Udp]
-public class Address([Udp(1)] string Street, [Udp(2)] string City, [Udp(3)] string State, [Udp(4)] string Zip)
+public class Address([property: Udp(1)] string Street, [property: Udp(2)] string City, [property: Udp(3)] string State, [property: Udp(4)] string Zip)
 {
     public static Address Empty { get; } = new(string.Empty, string.Empty, string.Empty, string.Empty);
 }

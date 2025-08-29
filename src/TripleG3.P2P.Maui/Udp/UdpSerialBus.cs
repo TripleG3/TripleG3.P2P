@@ -9,7 +9,7 @@ using TripleG3.P2P.Maui.Serialization;
 
 namespace TripleG3.P2P.Maui.Udp;
 
-internal sealed class UdpSerialBus : ISerialBus, IDisposable
+internal sealed partial class UdpSerialBus : ISerialBus, IDisposable
 {
     private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
     private readonly ConcurrentDictionary<Type, List<Delegate>> _subscriptions = new();
@@ -24,13 +24,14 @@ internal sealed class UdpSerialBus : ISerialBus, IDisposable
         _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
     }
 
-    public async ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
+    public ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
     {
-        if (IsListening) return;
+        if (IsListening) return ValueTask.CompletedTask;
         _config = config;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _udpClient = new UdpClient(config.LocalPort);
-        await Task.Run(() => ReceiveLoopAsync(_cts.Token));
+        _ = ReceiveLoopAsync(_cts.Token);
+        return ValueTask.CompletedTask;
     }
 
     private async Task ReceiveLoopAsync(CancellationToken token)
@@ -76,14 +77,14 @@ internal sealed class UdpSerialBus : ISerialBus, IDisposable
             if (obj is null) continue;
             foreach (var d in kvp.Value)
             {
-                try { d.DynamicInvoke(obj); } catch { /* ignore */ }
+                try{ d.DynamicInvoke(obj); } catch { /* ignore */ }
             }
         }
     }
 
     public void SubscribeTo<T>(Action<T> handler)
     {
-        var list = _subscriptions.GetOrAdd(typeof(T), _ => new List<Delegate>());
+        var list = _subscriptions.GetOrAdd(typeof(T), _ => []);
         list.Add(handler);
     }
 
