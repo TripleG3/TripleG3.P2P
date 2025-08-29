@@ -4,8 +4,8 @@ Create a service that can send / receive messages over a network via UDP.
 The IP address that we will receive messages to/from will later come from an API so we need to be able to pass the IP address dynamically.
 We do not need a fallback or error correction, this will be fire and forget. We will have a method to close the connection but that will also be accomplished manually.
 
-Note: This is going to be a nuget package to download for use in any MAUI .NET 9 project.
-It must also have a convenient way to let us know what the message contract will look like and the ability to autamatically serialize / deserialize the buffer to and from the contract.
+Note: This is going to be a NuGet package to download for use in any MAUI .NET 9 project.
+It must also have a convenient way to let us know what the message contract will look like and the ability to automatically serialize / deserialize the buffer to and from the contract.
 
 ## Architecture
 
@@ -13,8 +13,8 @@ It must also have a convenient way to let us know what the message contract will
 - C# Programming Language
 - Starting with UDP protocol but will later be updated to work with TCP, FTP, etc.
 - Follow SOLID principles and expose interfaces and implementations for injection.
-- Keep public interfaces between protocol's the same so that we don't care about the form of communcation protocol but can communicate via the same interface. i.e. The same interface will work wether we choose a UDP implementation, TCP implementation, etc.
-- Make messages immutable, preferrably using records.
+- Keep public interfaces between protocol's the same so that we don't care about the form of communication protocol but can communicate via the same interface. i.e. The same interface will work whether we choose a UDP implementation, TCP implementation, etc.
+- Make messages immutable, preferably using records.
 - Use `Span` and `Span<T>` whenever possible to make sending and receiving the message as fast as possible.
 
 ## Rules
@@ -43,8 +43,9 @@ byte[] = new[] { /* First 8 bytes represent the UdpHeader */};
 - Property level is telling us the order within the array.
 - Read the array as (past the first 8 bytes for the header) continue to read until hit the 3 bytes '@-@'. Excluding the '@-@' bytes, the others would be converted to the type required by the UDP message.
 - Example for `Person`
-- - bytes (9-n) will be the value that does into the propery with the `[Udp(1)]` attribute whre the 1 represents the order. For our `Person` `[Udp(1)]` will be deserialized as the `FirstName`. `[Udp(2)]` would be the `LastName` and so on.
-- - We will not end the array with `@-@` since we know exactly how many bytes to count.
+- - bytes (9-n) will be the `Envelope` with the `Person` object passed as the `Message` property within the `Envelope`.
+- - The buffer can be read from `@-@` to `@-@` where every byte in between those will be deserialized the associated property. The value with the `UdpAttribute`, `(1)` for example, is how we know the order of the data in the buffer.
+- - Example: For our `Person` `[Udp(1)]` will be deserialized as the `Name`. `[Udp(2)]` would be the `Age` and so on.
 
 ## Examples
 
@@ -70,6 +71,11 @@ internal record UdpHeader(int Length, short MessageType, SerializationProtocol S
     internal static UdpHeader Empty { get; } = new(0, 0, SerializationProtocol.None);
 }
 
+public record Envelope<T>([property: Udp(1)] string TypeName, T? Message)
+{
+    public static Envelope<T> Empty { get; } = new(string.Empty, default);
+}
+
 public enum SerializationProtocol : short
 {
     None, // Default behavior
@@ -88,3 +94,5 @@ public class Address([property: Udp(1)] string Street, [property: Udp(2)] string
     public static Address Empty { get; } = new(string.Empty, string.Empty, string.Empty, string.Empty);
 }
 ```
+
+Messages will be sent in an `Envelope` so that we know what type of message is being sent and can deserialize it properly.

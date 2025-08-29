@@ -1,8 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Net;
+using TripleG3.P2P.Maui.Attributes;
 using TripleG3.P2P.Maui.Core;
 using TripleG3.P2P.Maui.DependencyInjection;
-using TripleG3.P2P.Maui.Attributes;
-using System.Net;
 
 var services = new ServiceCollection();
 services.AddP2PUdp();

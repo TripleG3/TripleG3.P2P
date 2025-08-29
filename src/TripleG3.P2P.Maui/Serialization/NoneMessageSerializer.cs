@@ -17,12 +17,11 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
         // Attribute based simple delimited serialization using @-@ between ordered properties.
         if (value is null) return Array.Empty<byte>();
         var type = value.GetType();
-        var props = _cache.GetOrAdd(type, t => t.GetProperties()
+        var props = _cache.GetOrAdd(type, t => [.. t.GetProperties()
             .Select(p => (p, attr: p.GetCustomAttribute<Attributes.UdpAttribute>()))
             .Where(x => x.attr != null)
             .Select(x => (x.p, x.attr!.Order ?? int.MaxValue))
-            .OrderBy(x => x.Item2)
-            .ToArray());
+            .OrderBy(x => x.Item2)]);
         if (props.Length == 0) return Encoding.UTF8.GetBytes(value.ToString() ?? string.Empty);
 
         // Pre-calc sizes
@@ -111,6 +110,6 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             temp.Add((start, idx));
             start += idx + delimiter.Length;
         }
-        return temp.ToArray();
+        return [.. temp];
     }
 }
