@@ -71,7 +71,7 @@ internal record UdpHeader(int Length, short MessageType, SerializationProtocol S
     internal static UdpHeader Empty { get; } = new(0, 0, SerializationProtocol.None);
 }
 
-public record Envelope<T>([property: Udp(1)] string TypeName, T? Message)
+internal record Envelope<T>([property: Udp(1)] string TypeName, T? Message)
 {
     public static Envelope<T> Empty { get; } = new(string.Empty, default);
 }
@@ -82,13 +82,13 @@ public enum SerializationProtocol : short
     JsonRaw // Converts the types to JSON and sends the buffer json
 }
 
-[Udp]
+[UdpMessage("Person")]
 public record Person([property: Udp(1)] string Name, [property: Udp(2)] int Age, [property: Udp(3)] Address Address)
 {
     public static Person Empty { get; } = new(string.Empty, 0, Address.Empty);
 }
 
-[Udp]
+[UdpMessage<Address>]
 public class Address([property: Udp(1)] string Street, [property: Udp(2)] string City, [property: Udp(3)] string State, [property: Udp(4)] string Zip)
 {
     public static Address Empty { get; } = new(string.Empty, string.Empty, string.Empty, string.Empty);
@@ -96,4 +96,5 @@ public class Address([property: Udp(1)] string Street, [property: Udp(2)] string
 ```
 
 - Messages will be sent in an `Envelope` so that we know what type of message is being sent and can deserialize it properly.
-- In order for this contract to work, clients will need to know that the types must be named the same on both sides of the communication and have the same parameter types with the same UdpAttribute's applied using the same ordering.
+- In order for this contract to work, clients will need to know that the types must be named the same, or have the same `UdpMessageAttribute` or the same `UdpMessageAttribute<T>` on both sides of the communication.
+- The types must also have the same parameters and parameter types, with the same UdpAttribute's applied to the properties we wish to assign when deserializing.

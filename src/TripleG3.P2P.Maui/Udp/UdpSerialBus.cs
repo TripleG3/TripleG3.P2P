@@ -55,6 +55,8 @@ internal sealed partial class UdpSerialBus : ISerialBus, IDisposable
         }
     }
 
+    private static readonly MethodInfo _processEnvelopeGeneric = typeof(UdpSerialBus).GetMethod(nameof(ProcessEnvelope), BindingFlags.Instance | BindingFlags.NonPublic)!;
+
     private void ProcessIncoming(byte[] buffer)
     {
         if (buffer.Length < UdpHeader.Size) return;
@@ -62,24 +64,49 @@ internal sealed partial class UdpSerialBus : ISerialBus, IDisposable
         var payload = buffer.AsSpan(UdpHeader.Size, header.Length);
         var serializer = _serializers.TryGetValue(header.SerializationProtocol, out var ser) ? ser : _serializers[SerializationProtocol.None];
 
+        // First attempt to deserialize an Envelope<string> just to extract the TypeName (fast path for json).
+        // We don't know the underlying generic argument type yet; we'll scan subscriptions for matching type names.
         foreach (var kvp in _subscriptions)
         {
-            var targetType = kvp.Key;
-            object? obj;
-            if (serializer.Protocol == SerializationProtocol.None)
+            var targetClrType = kvp.Key; // This is the T clients subscribed with.
+            // Build Envelope<T>
+            var envelopeType = typeof(Envelope<>).MakeGenericType(targetClrType);
+            object? envelopeObj;
+            try
             {
-                obj = serializer.Deserialize(targetType, payload);
+                envelopeObj = serializer.Deserialize(envelopeType, payload);
             }
-            else
+            catch
             {
-                obj = serializer.Deserialize(targetType, payload);
+                continue; // deserialize failure for this T, try next.
             }
-            if (obj is null) continue;
+            if (envelopeObj is null) continue;
+            var typeNameProp = envelopeType.GetProperty("TypeName");
+            var messageProp = envelopeType.GetProperty("Message");
+            if (typeNameProp == null || messageProp == null) continue;
+            var typeName = typeNameProp.GetValue(envelopeObj) as string;
+            if (string.IsNullOrEmpty(typeName)) continue;
+
+            // Compare desired protocol name for the subscribed type
+            var expectedName = GetProtocolTypeName(targetClrType);
+            if (!string.Equals(typeName, expectedName, StringComparison.Ordinal))
+                continue;
+
+            var messageValue = messageProp.GetValue(envelopeObj);
+            if (messageValue is null) continue;
             foreach (var d in kvp.Value)
             {
-                try{ d.DynamicInvoke(obj); } catch { /* ignore */ }
+                try { d.DynamicInvoke(messageValue); } catch { }
             }
         }
+    }
+
+    private static string GetProtocolTypeName(Type type)
+    {
+        var attr = type.GetCustomAttribute<UdpMessageAttribute>();
+        if (attr?.Name is { Length: > 0 } n) return n;
+        // Generic variant base class check already handled via attribute inheritance.
+        return type.Name;
     }
 
     public void SubscribeTo<T>(Action<T> handler)
@@ -95,16 +122,11 @@ internal sealed partial class UdpSerialBus : ISerialBus, IDisposable
         var protocol = _config.SerializationProtocol;
         if (!_serializers.TryGetValue(protocol, out var serializer)) serializer = _serializers[SerializationProtocol.None];
 
-        byte[] body;
-        if (protocol == SerializationProtocol.None && message is not string && message is not byte[])
-        {
-            // attribute based serialization if decorated
-            body = serializer.Serialize(message!);
-        }
-        else
-        {
-            body = serializer.Serialize(message!);
-        }
+        // Wrap message in Envelope<T>
+        var typeName = GetProtocolTypeName(typeof(T));
+        var envelope = new Envelope<T>(typeName, message);
+
+        byte[] body = serializer.Serialize(envelope);
         var header = new UdpHeader(body.Length, (short)messageType, protocol);
         var buffer = new byte[UdpHeader.Size + body.Length];
         header.Write(buffer);
@@ -126,4 +148,7 @@ internal sealed partial class UdpSerialBus : ISerialBus, IDisposable
         _cts?.Cancel();
         _cts?.Dispose();
     }
+
+    // Placeholder for reflection acquired generic method (not used directly but kept for potential optimization)
+    private void ProcessEnvelope<T>(Envelope<T> envelope) { }
 }

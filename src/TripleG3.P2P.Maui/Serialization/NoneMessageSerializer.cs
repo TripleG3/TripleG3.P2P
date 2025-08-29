@@ -13,43 +13,93 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
     private static readonly byte[] Delimiter = Encoding.UTF8.GetBytes("@-@");
 
     public byte[] Serialize<T>(T value)
+        => SerializeInternal(value, typeof(T));
+
+    private byte[] SerializeInternal(object? value, Type? declaredType = null)
     {
-        // Attribute based simple delimited serialization using @-@ between ordered properties.
         if (value is null) return Array.Empty<byte>();
         var type = value.GetType();
+
+        // Special handling for Envelope<T>
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Envelope<>))
+        {
+            var typeNameProp = type.GetProperty("TypeName");
+            var messageProp = type.GetProperty("Message");
+            var typeName = typeNameProp?.GetValue(value) as string ?? string.Empty;
+            var messageObj = messageProp?.GetValue(value);
+            var typeNameBytes = Encoding.UTF8.GetBytes(typeName);
+            if (messageObj is null)
+            {
+                return typeNameBytes; // no message portion
+            }
+            var messageBytes = SerializeInternal(messageObj);
+            if (messageBytes.Length == 0)
+            {
+                return typeNameBytes; // still nothing to append
+            }
+            var buffer = new byte[typeNameBytes.Length + Delimiter.Length + messageBytes.Length];
+            var span = buffer.AsSpan();
+            typeNameBytes.CopyTo(span);
+            Delimiter.CopyTo(span[typeNameBytes.Length..]);
+            messageBytes.CopyTo(span[(typeNameBytes.Length + Delimiter.Length)..]);
+            return buffer;
+        }
+
+        // Attribute based simple delimited serialization using @-@ between ordered properties.
         var props = _cache.GetOrAdd(type, t => [.. t.GetProperties()
             .Select(p => (p, attr: p.GetCustomAttribute<Attributes.UdpAttribute>()))
             .Where(x => x.attr != null)
             .Select(x => (x.p, x.attr!.Order ?? int.MaxValue))
             .OrderBy(x => x.Item2)]);
-        if (props.Length == 0) return Encoding.UTF8.GetBytes(value.ToString() ?? string.Empty);
+        if (props.Length == 0)
+        {
+            // Fallback primitive/string ToString serialization
+            return Encoding.UTF8.GetBytes(value.ToString() ?? string.Empty);
+        }
 
-        // Pre-calc sizes
-        var stringValues = new string[props.Length];
+        // Pre-calc sizes and serialize each property (recursively) if complex
+        var serializedProps = new byte[props.Length][];
         int total = 0;
         for (int i = 0; i < props.Length; i++)
         {
             var v = props[i].Prop.GetValue(value);
-            var s = v?.ToString() ?? string.Empty;
-            stringValues[i] = s;
-            total += Encoding.UTF8.GetByteCount(s);
+            byte[] bytes;
+            if (v is null)
+            {
+                bytes = Array.Empty<byte>();
+            }
+            else if (IsPrimitiveLike(v.GetType()))
+            {
+                var s = v.ToString() ?? string.Empty;
+                bytes = Encoding.UTF8.GetBytes(s);
+            }
+            else
+            {
+                bytes = SerializeInternal(v); // recursive
+            }
+            serializedProps[i] = bytes;
+            total += bytes.Length;
             if (i < props.Length - 1) total += Delimiter.Length;
         }
-        var buffer = new byte[total];
-        var span = buffer.AsSpan();
+        var buffer2 = new byte[total];
+        var span2 = buffer2.AsSpan();
         int offset = 0;
-        for (int i = 0; i < stringValues.Length; i++)
+        for (int i = 0; i < serializedProps.Length; i++)
         {
-            var s = stringValues[i];
-            offset += Encoding.UTF8.GetBytes(s, span[offset..]);
-            if (i < stringValues.Length - 1)
+            var bytes = serializedProps[i];
+            bytes.CopyTo(span2[offset..]);
+            offset += bytes.Length;
+            if (i < serializedProps.Length - 1)
             {
-                Delimiter.CopyTo(span[offset..]);
+                Delimiter.CopyTo(span2[offset..]);
                 offset += Delimiter.Length;
             }
         }
-        return buffer;
+        return buffer2;
     }
+
+    private static bool IsPrimitiveLike(Type t)
+        => t.IsPrimitive || t.IsEnum || t == typeof(string) || t == typeof(Guid) || t == typeof(DateTime) || t == typeof(DateTimeOffset) || t == typeof(decimal);
 
     public T? Deserialize<T>(ReadOnlySpan<byte> data)
     {
@@ -59,11 +109,41 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 
     public object? Deserialize(Type type, ReadOnlySpan<byte> data)
     {
-        var ctor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+        // Special handling for Envelope<T>
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Envelope<>))
+        {
+            var innerType = type.GetGenericArguments()[0];
+            // Split only on first delimiter occurrence
+            int idx = data.IndexOf(Delimiter);
+            string typeName;
+            ReadOnlySpan<byte> messageData;
+            if (idx < 0)
+            {
+                typeName = Encoding.UTF8.GetString(data);
+                messageData = ReadOnlySpan<byte>.Empty;
+            }
+            else
+            {
+                typeName = Encoding.UTF8.GetString(data[..idx]);
+                messageData = data[(idx + Delimiter.Length)..];
+            }
+            object? messageObj = null;
+            if (!messageData.IsEmpty)
+            {
+                messageObj = Deserialize(innerType, messageData);
+            }
+            // Invoke envelope constructor (string, T)
+            var ctor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(c => c.GetParameters().Length == 2);
+            if (ctor is null) return null;
+            return ctor.Invoke([typeName, messageObj]);
+        }
+
+        var ctor2 = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
             .OrderByDescending(c => c.GetParameters().Length)
             .FirstOrDefault();
-        if (ctor == null) return null;
-        var parameters = ctor.GetParameters();
+        if (ctor2 == null) return null;
+        var parameters = ctor2.GetParameters();
         var parts = Split(data, Delimiter, parameters.Length);
         var args = new object?[parameters.Length];
         for (int i = 0; i < parameters.Length; i++)
@@ -78,14 +158,18 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             }
             args[i] = ConvertFromString(str, pType);
         }
-        return ctor.Invoke(args);
+        return ctor2.Invoke(args);
     }
 
     private static object? ConvertFromString(string value, Type targetType)
     {
         if (targetType == typeof(string)) return value;
-        if (targetType.IsEnum) return Enum.Parse(targetType, value, true);
-        if (targetType == typeof(Guid)) return Guid.Parse(value);
+        if (targetType.IsEnum)
+        {
+            if (string.IsNullOrEmpty(value)) return Activator.CreateInstance(targetType);
+            return Enum.Parse(targetType, value, true);
+        }
+        if (targetType == typeof(Guid)) return string.IsNullOrEmpty(value) ? Guid.Empty : Guid.Parse(value);
         if (string.IsNullOrEmpty(value)) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
         return Convert.ChangeType(value, targetType);
     }
