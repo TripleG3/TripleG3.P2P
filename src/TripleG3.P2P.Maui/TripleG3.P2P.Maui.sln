@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36414.22 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TripleG3.P2P.Maui", "TripleG3.P2P.Maui.csproj", "{0FC33A23-D3E4-1989-6752-C286A8EF5F84}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0FC33A23-D3E4-1989-6752-C286A8EF5F84}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0FC33A23-D3E4-1989-6752-C286A8EF5F84}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0FC33A23-D3E4-1989-6752-C286A8EF5F84}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0FC33A23-D3E4-1989-6752-C286A8EF5F84}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8481D0BF-B28B-4916-9CF4-56678939451D}
+	EndGlobalSection
+EndGlobal
