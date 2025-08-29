@@ -95,4 +95,5 @@ public class Address([property: Udp(1)] string Street, [property: Udp(2)] string
 }
 ```
 
-Messages will be sent in an `Envelope` so that we know what type of message is being sent and can deserialize it properly.
+- Messages will be sent in an `Envelope` so that we know what type of message is being sent and can deserialize it properly.
+- In order for this contract to work, clients will need to know that the types must be named the same on both sides of the communication and have the same parameter types with the same UdpAttribute's applied using the same ordering.
