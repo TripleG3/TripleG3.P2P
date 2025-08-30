@@ -32,9 +32,11 @@
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
 		<EmbedUntrackedSources>true</EmbedUntrackedSources>
 		<AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
 	</PropertyGroup>
 
 	<ItemGroup>
+	  <None Include="..\..\README.md" Pack="true" PackagePath="/" Link="README.md" />
 	  <None Include=".github\workflows\ci-release.yml" />
 	</ItemGroup>
 
