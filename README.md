@@ -1,4 +1,4 @@
-# TripleG3.P2P.Maui
+# TripleG3.P2P
 
 High-performance, attribute-driven peer?to?peer messaging for .NET 9 MAUI apps over UDP (extensible to future TCP / other transports). Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8?byte header + pluggable serialization strategy.
 
@@ -6,7 +6,7 @@ High-performance, attribute-driven peer?to?peer messaging for .NET 9 MAUI apps o
 
 ---
 ## Why?
-Typical networking layers force you to hand-roll framing, routing, and serialization. TripleG3.P2P.Maui gives you:
+Typical networking layers force you to hand-roll framing, routing, and serialization. TripleG3.P2P gives you:
 - A single minimal interface: `ISerialBus` (send, subscribe, start, close)
 - Deterministic wire contract via `[Udp]` & `[UdpMessage]` attributes (order + protocol name stability)
 - Envelope?based dispatch that is assembly agnostic (type *names* / attribute names, not CLR identity)
@@ -28,7 +28,7 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 ## Installation
 NuGet (once published):
 ```
-dotnet add package TripleG3.P2P.Maui
+dotnet add package TripleG3.P2P
 ```
 Or reference the project directly while developing.
 
@@ -99,8 +99,8 @@ Payload:
 ---
 ## Quick Start
 ```csharp
-using TripleG3.P2P.Maui.Attributes;
-using TripleG3.P2P.Maui.Core;
+using TripleG3.P2P.Attributes;
+using TripleG3.P2P.Core;
 using System.Net;
 
 [UdpMessage("Person")] // Protocol type name

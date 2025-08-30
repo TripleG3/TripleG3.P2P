@@ -1,6 +1,6 @@
 using System;
 
-namespace TripleG3.P2P.Maui.Attributes;
+namespace TripleG3.P2P.Attributes;
 
 /// <summary>
 /// Marks a class/struct or property as part of the UDP delimited serialization contract.

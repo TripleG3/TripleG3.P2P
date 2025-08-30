@@ -4,11 +4,11 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using TripleG3.P2P.Maui.Attributes;
-using TripleG3.P2P.Maui.Core;
-using TripleG3.P2P.Maui.Serialization;
+using TripleG3.P2P.Attributes;
+using TripleG3.P2P.Core;
+using TripleG3.P2P.Serialization;
 
-namespace TripleG3.P2P.Maui.Udp;
+namespace TripleG3.P2P.Udp;
 
 /// <summary>
 /// UDP implementation of <see cref="ISerialBus"/> providing fire-and-forget message transmission

@@ -1,4 +1,4 @@
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Supported serialization strategies for converting envelopes into bytes.

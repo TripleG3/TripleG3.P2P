@@ -1,6 +1,6 @@
-using TripleG3.P2P.Maui.Core;
+using TripleG3.P2P.Core;
 
-namespace TripleG3.P2P.Maui.Serialization;
+namespace TripleG3.P2P.Serialization;
 
 /// <summary>
 /// Contract for message serializers that convert envelopes (and primitives) to / from byte sequences.

@@ -1,7 +1,7 @@
 using System.Net;
-using TripleG3.P2P.Maui.Core;
+using TripleG3.P2P.Core;
 
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Transport + serialization configuration applied when starting a serial bus.

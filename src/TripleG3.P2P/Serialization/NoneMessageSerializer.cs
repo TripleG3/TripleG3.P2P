@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
-using TripleG3.P2P.Maui.Core;
+using TripleG3.P2P.Core;
 
-namespace TripleG3.P2P.Maui.Serialization;
+namespace TripleG3.P2P.Serialization;
 
 /// <summary>
 /// Attribute-driven, delimiter (@-@) based serializer capturing only properties marked with <c>[Udp]</c>.

@@ -1,4 +1,4 @@
-namespace TripleG3.P2P.Maui.Attributes;
+namespace TripleG3.P2P.Attributes;
 
 /// <summary>
 /// Identifies a UDP message contract type and provides the protocol-visible name used during transport.

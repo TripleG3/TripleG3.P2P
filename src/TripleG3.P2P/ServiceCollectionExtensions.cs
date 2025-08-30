@@ -1,9 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
-using TripleG3.P2P.Maui.Core;
-using TripleG3.P2P.Maui.Serialization;
-using TripleG3.P2P.Maui.Udp;
+using TripleG3.P2P.Core;
+using TripleG3.P2P.Serialization;
+using TripleG3.P2P.Udp;
 
-namespace TripleG3.P2P.Maui.DependencyInjection;
+namespace TripleG3.P2P;
 
 public static class ServiceCollectionExtensions
 {

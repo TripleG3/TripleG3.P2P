@@ -1,6 +1,6 @@
 ﻿using System.Net;
-using TripleG3.P2P.Maui.Attributes;
-using TripleG3.P2P.Maui.Core;
+using TripleG3.P2P.Attributes;
+using TripleG3.P2P.Core;
 
 namespace ClientA_Tester;
 

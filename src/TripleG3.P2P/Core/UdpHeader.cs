@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
-using TripleG3.P2P.Maui.Attributes;
+using TripleG3.P2P.Attributes;
 
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Fixed-size (8 bytes) UDP header containing payload length, message type and serialization protocol identifier.

@@ -1,8 +1,8 @@
 using System.Text;
 using System.Text.Json;
-using TripleG3.P2P.Maui.Core;
+using TripleG3.P2P.Core;
 
-namespace TripleG3.P2P.Maui.Serialization;
+namespace TripleG3.P2P.Serialization;
 
 /// <summary>
 /// JSON serializer using System.Text.Json (web defaults). Serializes the whole envelope as JSON.

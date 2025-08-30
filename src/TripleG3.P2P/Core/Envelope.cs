@@ -1,6 +1,6 @@
-using TripleG3.P2P.Maui.Attributes;
+using TripleG3.P2P.Attributes;
 
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Generic transport envelope carrying a protocol <see cref="TypeName"/> plus the typed <see cref="Message"/> payload.

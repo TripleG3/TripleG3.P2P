@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\TripleG3.P2P.Maui\TripleG3.P2P.Maui.csproj" />
+    <ProjectReference Include="..\..\..\TripleG3.P2P\TripleG3.P2P.csproj" />
   </ItemGroup>
 
 </Project>

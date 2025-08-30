@@ -8,7 +8,7 @@ jobs:
   build-pack-publish:
     runs-on: windows-latest
     env:
-      PROJECT_PATH: src/TripleG3.P2P.Maui/TripleG3.P2P.Maui.csproj
+      PROJECT_PATH: TripleG3.P2P/TripleG3.P2P.csproj
       NUGET_SOURCE: https://api.nuget.org/v3/index.json
     defaults:
       run:
@@ -24,11 +24,6 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Install MAUI Workloads
-        run: |
-          dotnet workload install maui --skip-manifest-update
-          dotnet workload list
-
       - name: Restore
         run: dotnet restore $PROJECT_PATH
 
@@ -40,7 +35,7 @@ jobs:
           $base = $xml.Project.PropertyGroup.Version
           if (-not $base) { Write-Error 'Could not read <Version> from csproj'; exit 1 }
           $parts = $base.Split('.')
-          if ($parts.Length -lt 2) { Write-Error "Unexpected version format: $base"; exit 1 }
+            if ($parts.Length -lt 2) { Write-Error "Unexpected version format: $base"; exit 1 }
           $major = $parts[0]
           $minor = $parts[1]
           $patch = $env:GITHUB_RUN_NUMBER
@@ -57,14 +52,14 @@ jobs:
       - name: Publish Artifacts
         uses: actions/upload-artifact@v4
         with:
-            name: nuget-packages
-            path: artifacts/*.nupkg
+          name: nuget-packages
+          path: artifacts/*.nupkg
 
       - name: Publish Symbols
         uses: actions/upload-artifact@v4
         with:
-            name: nuget-symbols
-            path: artifacts/*.snupkg
+          name: nuget-symbols
+          path: artifacts/*.snupkg
 
       - name: Push to NuGet.org
         if: success() && env.NUGET_SOURCE == 'https://api.nuget.org/v3/index.json'

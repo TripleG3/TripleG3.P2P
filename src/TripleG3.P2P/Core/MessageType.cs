@@ -1,4 +1,4 @@
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Logical classification of a transport message; reserved for future expansion (e.g. control / ack / error).

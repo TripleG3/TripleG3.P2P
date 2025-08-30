@@ -1,7 +1,7 @@
-using TripleG3.P2P.Maui.Serialization;
-using TripleG3.P2P.Maui.Udp;
+using TripleG3.P2P.Serialization;
+using TripleG3.P2P.Udp;
 
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Factory helpers for constructing <see cref="ISerialBus"/> implementations.

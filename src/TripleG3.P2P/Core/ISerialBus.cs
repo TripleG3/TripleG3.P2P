@@ -1,4 +1,4 @@
-namespace TripleG3.P2P.Maui.Core;
+namespace TripleG3.P2P.Core;
 
 /// <summary>
 /// Abstraction for a bidirectional serial messaging bus. Implementations (UDP, TCP, etc.)
