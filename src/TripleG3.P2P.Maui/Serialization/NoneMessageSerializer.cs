@@ -132,33 +132,50 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             {
                 messageObj = Deserialize(innerType, messageData);
             }
-            // Invoke envelope constructor (string, T)
-            var ctor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            var ctorEnv = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
                 .FirstOrDefault(c => c.GetParameters().Length == 2);
-            if (ctor is null) return null;
-            return ctor.Invoke([typeName, messageObj]);
+            if (ctorEnv is null) return null;
+            return ctorEnv.Invoke([typeName, messageObj]);
         }
 
-        var ctor2 = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+        var ctor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
             .OrderByDescending(c => c.GetParameters().Length)
             .FirstOrDefault();
-        if (ctor2 == null) return null;
-        var parameters = ctor2.GetParameters();
+        if (ctor == null) return null;
+        var parameters = ctor.GetParameters();
+        if (parameters.Length == 0) return ctor.Invoke(null);
+
         var parts = Split(data, Delimiter, parameters.Length);
         var args = new object?[parameters.Length];
         for (int i = 0; i < parameters.Length; i++)
         {
             var pType = parameters[i].ParameterType;
-            string str = string.Empty;
+            ReadOnlySpan<byte> slice = ReadOnlySpan<byte>.Empty;
             if (i < parts.Length)
             {
                 var (start, len) = parts[i];
                 if (start >= 0 && len >= 0 && start + len <= data.Length)
-                    str = Encoding.UTF8.GetString(data.Slice(start, len));
+                    slice = data.Slice(start, len);
             }
-            args[i] = ConvertFromString(str, pType);
+
+            if (slice.IsEmpty)
+            {
+                args[i] = pType.IsValueType ? Activator.CreateInstance(pType) : null;
+                continue;
+            }
+
+            if (IsPrimitiveLike(pType))
+            {
+                var str = Encoding.UTF8.GetString(slice);
+                args[i] = ConvertFromString(str, pType);
+            }
+            else
+            {
+                // Recursively deserialize complex/nested types.
+                args[i] = Deserialize(pType, slice);
+            }
         }
-        return ctor2.Invoke(args);
+        return ctor.Invoke(args);
     }
 
     private static object? ConvertFromString(string value, Type targetType)

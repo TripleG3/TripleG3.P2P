@@ -7,8 +7,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-    <ItemGroup>
-      <ProjectReference Include="..\..\..\src\TripleG3.P2P.Maui\TripleG3.P2P.Maui.csproj" />
-    </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\TripleG3.P2P.Maui\TripleG3.P2P.Maui.csproj" />
+  </ItemGroup>
+
 
 </Project>
