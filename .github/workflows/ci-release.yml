@@ -8,7 +8,7 @@ jobs:
   build-pack-publish:
     runs-on: windows-latest
     env:
-      PROJECT_PATH: TripleG3.P2P/TripleG3.P2P.csproj
+      PROJECT_PATH: src/TripleG3.P2P/TripleG3.P2P.csproj
       NUGET_SOURCE: https://api.nuget.org/v3/index.json
     defaults:
       run:
