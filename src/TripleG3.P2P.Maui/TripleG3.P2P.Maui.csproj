@@ -20,8 +20,8 @@
 
 		<!-- NuGet Package Metadata -->
 		<PackageId>TripleG3.P2P.Maui</PackageId>
-		<Version>0.1.0</Version>
-		<Authors>TripleG3</Authors>
+		<Version>1.0.0</Version>
+		<Authors>Michael Puckett, II</Authors>
 		<Company>TripleG3</Company>
 		<Product>TripleG3.P2P.Maui</Product>
 		<Description>Peer-to-peer UDP messaging abstraction for .NET 9 MAUI apps with attribute-based high-performance serialization.</Description>
@@ -38,7 +38,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+	  <None Include=".github\workflows\ci-release.yml" />
 	</ItemGroup>
 
 </Project>

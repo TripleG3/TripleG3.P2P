@@ -1,0 +1,85 @@
+name: Build & Publish NuGet (main branch)
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-pack-publish:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_PATH: src/TripleG3.P2P.Maui/TripleG3.P2P.Maui.csproj
+      NUGET_SOURCE: https://api.nuget.org/v3/index.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore $PROJECT_PATH
+
+      - name: Compute Version
+        id: version
+        shell: bash
+        run: |
+          BASE_VERSION=$(grep -oP '(?<=<Version>)[^<]+' $PROJECT_PATH | head -n1)
+          if [ -z "$BASE_VERSION" ]; then
+            echo "Could not read <Version> from csproj" >&2
+            exit 1
+          fi
+          MAJOR=$(echo $BASE_VERSION | cut -d. -f1)
+          MINOR=$(echo $BASE_VERSION | cut -d. -f2)
+          # Use GitHub run number for patch so every merge to main yields a unique version.
+          PATCH=${GITHUB_RUN_NUMBER}
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "Resolved version: $NEW_VERSION (base $BASE_VERSION)"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build (Release)
+        run: dotnet build $PROJECT_PATH -c Release -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
+
+      - name: Pack
+        run: dotnet pack $PROJECT_PATH -c Release --no-build -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} -o ./artifacts
+
+      - name: Publish Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+            name: nuget-packages
+            path: artifacts/*.nupkg
+
+      - name: Publish Symbols
+        uses: actions/upload-artifact@v4
+        with:
+            name: nuget-symbols
+            path: artifacts/*.snupkg
+
+      - name: Push to NuGet.org
+        if: success() && env.NUGET_SOURCE == 'https://api.nuget.org/v3/index.json'
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY secret not set; skipping push." >&2
+            exit 0
+          fi
+          dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate --no-symbols
+          dotnet nuget push "artifacts/*.snupkg" --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate || true
+
+      - name: Create / Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
