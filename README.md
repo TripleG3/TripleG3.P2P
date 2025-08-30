@@ -32,13 +32,11 @@ dotnet add package TripleG3.P2P
 ```
 Or reference the project directly while developing.
 
-> CI: Build requires MAUI workloads (Windows build agent or local VS with .NET 9 workloads). GitHub workflow installs `maui` workload explicitly.
-
 ---
 ## Target Frameworks
 Current `TargetFrameworks`:
 ```
-net9.0; net9.0-android; net9.0-ios; net9.0-maccatalyst (+ net9.0-windows10.0.19041.0 on Windows)
+net9.0
 ```
 Pick the one you consume in your app; NuGet tooling selects the right asset.
 
