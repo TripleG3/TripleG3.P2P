@@ -75,8 +75,19 @@ jobs:
             echo "NUGET_API_KEY secret not set; skipping push." >&2
             exit 0
           fi
-          dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate --no-symbols
-          dotnet nuget push "artifacts/*.snupkg" --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate || true
+          set -e
+          echo "Packages in artifacts directory:" >&2
+          ls -1 artifacts || true
+          for pkg in artifacts/*.nupkg; do
+            [ -f "$pkg" ] || continue
+            echo "Pushing $pkg" >&2
+            dotnet nuget push $pkg --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate --no-symbols
+          done
+          for sym in artifacts/*.snupkg; do
+            [ -f "$sym" ] || continue
+            echo "Pushing symbols $sym" >&2
+            dotnet nuget push $sym --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate || true
+          done
 
       - name: Create / Update GitHub Release
         uses: softprops/action-gh-release@v2
