@@ -31,26 +31,27 @@ internal static class Program
         SubscribeAll("B-Delimited", busDelimited);
         SubscribeAll("B-Json", busJson);
 
+        await Task.Delay(1000); // ensure A is likely started first
+
         for (int i = 0; i < 3; i++)
         {
-            await SendAll(busDelimited, $"(Delimited) Iter {i}");
-            await SendAll(busJson, $"(Json) Iter {i}");
-            await Task.Delay(1500);
+            await SendAll(busDelimited);
+            await SendAll(busJson);
         }
 
         Console.WriteLine("Client B finished sending. Press ENTER to exit.");
         Console.ReadLine();
     }
 
-    private static async Task SendAll(ISerialBus bus, string context)
+    private static async Task SendAll(ISerialBus bus)
     {
         await bus.SendAsync(new Ping(DateTime.UtcNow.Ticks));
-        Console.WriteLine($"[B][SEND]{context} Ping");
-        var person = new NestedPerson($"PersonB_{context}", 30, new NestedAddress("2 Example Rd", "Exampletown", "EX", "99999"));
+        //Console.WriteLine($"[B][SEND]{context} Ping");
+        var person = new NestedPerson($"PersonB", 30, new NestedAddress("2 Example Rd", "Exampletown", "EX", "99999"));
         await bus.SendAsync(person);
-        Console.WriteLine($"[B][SEND]{context} Person {person.Name}");
-        await bus.SendAsync("Hey from B " + context);
-        Console.WriteLine($"[B][SEND]{context} String message");
+        //Console.WriteLine($"[B][SEND]{context} Person {person.Name}");
+        await bus.SendAsync("Hey from B ");
+        //Console.WriteLine($"[B][SEND]{context} String message");
     }
 
     private static void SubscribeAll(string tag, ISerialBus bus)

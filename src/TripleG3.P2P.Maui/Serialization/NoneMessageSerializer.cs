@@ -109,11 +109,22 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 
     public object? Deserialize(Type type, ReadOnlySpan<byte> data)
     {
+        // Special case primitive-like root types (especially string) so we don't try to use constructors.
+        if (type == typeof(string))
+        {
+            return Encoding.UTF8.GetString(data);
+        }
+        if (IsPrimitiveLike(type) && type != typeof(string))
+        {
+            // Interpret the whole slice as the textual form of the primitive.
+            var strVal = Encoding.UTF8.GetString(data);
+            return ConvertFromString(strVal, type);
+        }
+
         // Special handling for Envelope<T>
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Envelope<>))
         {
             var innerType = type.GetGenericArguments()[0];
-            // Split only on first delimiter occurrence
             int idx = data.IndexOf(Delimiter);
             string typeName;
             ReadOnlySpan<byte> messageData;
