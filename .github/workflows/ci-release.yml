@@ -6,10 +6,13 @@ on:
 
 jobs:
   build-pack-publish:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     env:
       PROJECT_PATH: src/TripleG3.P2P.Maui/TripleG3.P2P.Maui.csproj
       NUGET_SOURCE: https://api.nuget.org/v3/index.json
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,12 +24,16 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Install MAUI Workloads
+        run: |
+          dotnet workload install maui --skip-manifest-update
+          dotnet workload list
+
       - name: Restore
         run: dotnet restore $PROJECT_PATH
 
       - name: Compute Version
         id: version
-        shell: bash
         run: |
           BASE_VERSION=$(grep -oP '(?<=<Version>)[^<]+' $PROJECT_PATH | head -n1)
           if [ -z "$BASE_VERSION" ]; then
@@ -35,7 +42,6 @@ jobs:
           fi
           MAJOR=$(echo $BASE_VERSION | cut -d. -f1)
           MINOR=$(echo $BASE_VERSION | cut -d. -f2)
-          # Use GitHub run number for patch so every merge to main yields a unique version.
           PATCH=${GITHUB_RUN_NUMBER}
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "Resolved version: $NEW_VERSION (base $BASE_VERSION)"

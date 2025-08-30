@@ -25,7 +25,7 @@
 		<Company>TripleG3</Company>
 		<Product>TripleG3.P2P.Maui</Product>
 		<Description>Peer-to-peer UDP messaging abstraction for .NET 9 MAUI apps with attribute-based high-performance serialization.</Description>
-		<PackageTags>MAUI;UDP;Networking;Serialization;P2P</PackageTags>
+		<PackageTags>MAUI;UDP;TCP;FTP;Networking;Serialization;P2P</PackageTags>
 		<RepositoryUrl>https://github.com/TripleG3/TripleG3.P2P.Maui</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageProjectUrl>https://github.com/TripleG3/TripleG3.P2P.Maui</PackageProjectUrl>
