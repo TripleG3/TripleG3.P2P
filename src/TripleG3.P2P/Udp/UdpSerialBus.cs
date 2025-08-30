@@ -152,7 +152,33 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
         var buffer = new byte[UdpHeader.Size + body.Length];
         header.Write(buffer);
         body.CopyTo(buffer.AsSpan(UdpHeader.Size));
-        await _udpClient.SendAsync(buffer, buffer.Length, _config.RemoteEndPoint);
+        // Build unique endpoint list: primary + broadcast extras
+        if (_config.RemoteEndPoint is null) throw new InvalidOperationException("RemoteEndPoint not configured.");
+        // De-duplicate using hash set of endpoint strings
+        var sentTo = new HashSet<string>(StringComparer.Ordinal);
+        async Task SendToAsync(IPEndPoint ep)
+        {
+            var key = ep.ToString();
+            if (!sentTo.Add(key)) return; // already scheduled
+            try
+            {
+                await _udpClient.SendAsync(buffer, buffer.Length, ep).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Swallow; consider logging hook
+            }
+        }
+
+        await SendToAsync(_config.RemoteEndPoint);
+        if (_config.BroadcastEndPoints.Count > 0)
+        {
+            // Send sequentially to maintain order; could be parallel if needed but no awaits inside loop aside from network
+            foreach (var ep in _config.BroadcastEndPoints)
+            {
+                await SendToAsync(ep);
+            }
+        }
     }
 
     /// <inheritdoc />

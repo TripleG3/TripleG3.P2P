@@ -1,47 +1,61 @@
 # TripleG3.P2P
 
-High-performance, attribute-driven peer?to?peer messaging for .NET 9 MAUI apps over UDP (extensible to future TCP / other transports). Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8?byte header + pluggable serialization strategy.
+High-performance, attribute-driven peer-to-peer messaging for .NET 9 / MAUI apps over UDP (extensible to future TCP / other transports). Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8â€‘byte header + pluggable serialization strategy.
 
-> Status: UDP transport + two serializers (Delimited / `None` and `JsonRaw`) implemented. Designed so additional transports (TCP, FTP, etc.) and serializers can slot in without breaking user code.
+> Status: UDP transport + two serializers (Delimited / `None` and `JsonRaw`) implemented. Designed so additional transports (TCP, etc.) and serializers can slot in without breaking user code.
 
 ---
+
 ## Why?
+
 Typical networking layers force you to hand-roll framing, routing, and serialization. TripleG3.P2P gives you:
+
 - A single minimal interface: `ISerialBus` (send, subscribe, start, close)
 - Deterministic wire contract via `[Udp]` & `[UdpMessage]` attributes (order + protocol name stability)
-- Envelope?based dispatch that is assembly agnostic (type *names* / attribute names, not CLR identity)
+- Envelope-based dispatch that is assembly agnostic (type *names* / attribute names, not CLR identity)
 - Choice between ultra-light delimiter serialization or raw JSON
-- Safe, isolated subscriptions (late subscribers don’t crash the loop)
+- Safe, isolated subscriptions (late subscribers don't crash the loop)
 - Zero allocations for header parsing (Span/Memory friendly design internally)
+- NEW: Multi-endpoint broadcast fan-out with duplicate endpoint suppression
 
 ---
+
 ## Features At A Glance
+
 - Multi-target (net9.0 + net9.0-android + net9.0-ios + net9.0-maccatalyst + conditional windows)
-- 8?byte header layout (Length / MessageType / SerializationProtocol)
+- 8â€‘byte header layout (Length / MessageType / SerializationProtocol)
 - Attribute ordered property serialization with stable delimiter `@-@`
 - Automatic Envelope wrapping so handlers receive strong types directly
 - Multiple simultaneous protocol instances (e.g. Delimited + JSON in sample)
+- Multi-endpoint broadcast (one `SendAsync` -> N peers)
 - Plug-in serializer model (`IMessageSerializer`)
 - Graceful cancellation / disposal
 
 ---
 ## Installation
+
 NuGet (once published):
-```
+
+```bash
 dotnet add package TripleG3.P2P
 ```
+
 Or reference the project directly while developing.
 
 ---
 ## Target Frameworks
+
 Current `TargetFrameworks`:
-```
+
+```text
 net9.0
 ```
+
 Pick the one you consume in your app; NuGet tooling selects the right asset.
 
 ---
 ## Core Concepts
+
 ### ISerialBus
 ```
 public interface ISerialBus {
@@ -55,14 +69,87 @@ public interface ISerialBus {
 Abstracts the transport (today UDP only). Future TCP will implement the same contract.
 
 ### ProtocolConfiguration
-```
+
+```csharp
 public sealed class ProtocolConfiguration {
     IPEndPoint RemoteEndPoint { get; init; }
+    IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; }
     int        LocalPort      { get; init; }
     SerializationProtocol SerializationProtocol { get; init; }
 }
 ```
+
 Controls binding + outbound destination and the serialization protocol used for every message on this bus instance.
+
+#### Broadcasting / Fan-Out
+
+Provide one or more `BroadcastEndPoints` to automatically fan out every `SendAsync` from a bus instance to: `RemoteEndPoint âˆª BroadcastEndPoints` (set semantics). Duplicate endpoints (same `address:port`) are suppressed.
+
+Basic one-to-many:
+
+```csharp
+await bus.StartListeningAsync(new ProtocolConfiguration {
+    LocalPort = 7000,
+    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 7001), // primary
+    BroadcastEndPoints = new [] {
+        new IPEndPoint(IPAddress.Loopback, 7002),
+        new IPEndPoint(IPAddress.Loopback, 7003)
+    },
+    SerializationProtocol = SerializationProtocol.None
+});
+
+await bus.SendAsync(new Chat("me", "hi everyone")); // reaches 7001, 7002, 7003
+```
+
+Hub & Spokes (hub at 8000 -> spokes 8001/8002, spokes reply only to hub):
+
+```csharp
+// Hub
+await hub.StartListeningAsync(new ProtocolConfiguration {
+    LocalPort = 8000,
+    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 8001),
+    BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, 8002) },
+    SerializationProtocol = SerializationProtocol.JsonRaw
+});
+
+// Spoke 1
+await s1.StartListeningAsync(new ProtocolConfiguration {
+    LocalPort = 8001,
+    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 8000),
+    SerializationProtocol = SerializationProtocol.JsonRaw
+});
+
+// Spoke 2 (similar to s1; LocalPort = 8002)
+
+await hub.SendAsync(new BroadcastAnnouncement("server", "hello spokes"));
+```
+
+Full Mesh (N peers each send to all others): create N buses where for each index `i` choose one peer as `RemoteEndPoint` and all remaining as `BroadcastEndPoints`. (See integration test `Concurrent_Broadcasts_All_Messages_Delivered_Exactly_Once`).
+
+Duplicate endpoint suppression:
+
+```csharp
+await bus.StartListeningAsync(new ProtocolConfiguration {
+    LocalPort = 8100,
+    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 8101),
+    BroadcastEndPoints = new [] { // 8102 duplicated
+        new IPEndPoint(IPAddress.Loopback, 8102),
+        new IPEndPoint(IPAddress.Loopback, 8102)
+    }
+});
+// Only one datagram sent to 8102.
+```
+
+Mixed types broadcast (string + complex):
+
+```csharp
+await sender.SendAsync("alpha");
+await sender.SendAsync(new Person("carol", 27, new Address("2 Ave", "Metro")));
+```
+
+Concurrency: safe to invoke `SendAsync` concurrently; the underlying UDP socket will serialize sends. Out-of-order arrival is still possible (UDP). If ordering matters, include sequence numbers inside your messages.
+
+Reliability Disclaimer: UDP does not guarantee delivery / ordering. The library only guarantees *attempted* one-shot fan-out; implement retries / ACK at the message layer if required.
 
 ### Envelope<T>
 Internal transport wrapper: `TypeName` + `Message`. The receiver inspects `TypeName` to look up subscriptions, then materializes only the requested type.
@@ -128,6 +215,7 @@ Run a second process with reversed ports (7001 <-> 7000) to complete the loop.
 
 ---
 ## Using JSON Instead
+
 ```csharp
 var jsonBus = SerialBusFactory.CreateUdp();
 await jsonBus.StartListeningAsync(new ProtocolConfiguration {
@@ -136,35 +224,42 @@ await jsonBus.StartListeningAsync(new ProtocolConfiguration {
     SerializationProtocol = SerializationProtocol.JsonRaw
 });
 ```
-JSON serializer ignores `[Udp]` ordering—standard JSON rules apply; `TypeName` embedded as `typeName`/`TypeName`.
+
+JSON serializer ignores `[Udp]` orderingâ€”standard JSON rules apply; `TypeName` embedded as `typeName`/`TypeName`.
 
 ---
 ## Subscriptions
+
 ```csharp
 bus.SubscribeTo<string>(s => Console.WriteLine($"Raw string: {s}"));
 bus.SubscribeTo<Person>(HandlePerson);
 
 void HandlePerson(Person p) { /*...*/ }
 ```
+
 - Multiple handlers per type allowed
 - Subscription key is the protocol type name (attribute override or CLR name)
 - If no handler matches, message is silently ignored
 
 ---
 ## Sending
+
 ```csharp
 await bus.SendAsync("Hello peer");
 await bus.SendAsync(new Person("Bob", 42, new Address("2 Road", "City", "ST", "22222")));
 ```
-All messages on a bus instance use that instance’s `SerializationProtocol`.
+
+All messages on a bus instance use that instanceâ€™s `SerializationProtocol`.
 
 ---
 ## Graceful Shutdown
+
 ```csharp
 await bus.CloseConnectionAsync();
 // or dispose
 (bus as IDisposable)?.Dispose();
 ```
+
 Cancels the receive loop & disposes socket.
 
 ---

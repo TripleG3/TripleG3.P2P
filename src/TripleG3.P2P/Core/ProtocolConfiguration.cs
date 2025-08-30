@@ -15,6 +15,13 @@ public sealed class ProtocolConfiguration
     public required IPEndPoint RemoteEndPoint { get; init; }
 
     /// <summary>
+    /// Optional additional endpoints that will also receive every outbound message (broadcast).
+    /// The <see cref="RemoteEndPoint"/> is always included implicitly; duplicates are de-duplicated
+    /// by endpoint string representation (address:port).
+    /// </summary>
+    public IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; } = Array.Empty<IPEndPoint>();
+
+    /// <summary>
     /// Local UDP port to bind for inbound messages.
     /// </summary>
     public required int LocalPort { get; init; }
