@@ -4,6 +4,9 @@ using TripleG3.P2P.Maui.Core;
 
 namespace TripleG3.P2P.Maui.Serialization;
 
+/// <summary>
+/// JSON serializer using System.Text.Json (web defaults). Serializes the whole envelope as JSON.
+/// </summary>
 internal sealed class JsonRawMessageSerializer : IMessageSerializer
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)

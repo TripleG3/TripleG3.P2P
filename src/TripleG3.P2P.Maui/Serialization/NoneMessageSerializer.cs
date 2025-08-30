@@ -5,6 +5,10 @@ using TripleG3.P2P.Maui.Core;
 
 namespace TripleG3.P2P.Maui.Serialization;
 
+/// <summary>
+/// Attribute-driven, delimiter (@-@) based serializer capturing only properties marked with <c>[Udp]</c>.
+/// Provides a compact textual wire format with minimal allocations and recursive support for nested annotated types.
+/// </summary>
 internal sealed class NoneMessageSerializer : IMessageSerializer
 {
     public SerializationProtocol Protocol => SerializationProtocol.None;
@@ -20,7 +24,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
         if (value is null) return Array.Empty<byte>();
         var type = value.GetType();
 
-        // Special handling for Envelope<T>
+        // Envelope<T>
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Envelope<>))
         {
             var typeNameProp = type.GetProperty("TypeName");
@@ -28,15 +32,9 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             var typeName = typeNameProp?.GetValue(value) as string ?? string.Empty;
             var messageObj = messageProp?.GetValue(value);
             var typeNameBytes = Encoding.UTF8.GetBytes(typeName);
-            if (messageObj is null)
-            {
-                return typeNameBytes; // no message portion
-            }
+            if (messageObj is null) return typeNameBytes;
             var messageBytes = SerializeInternal(messageObj);
-            if (messageBytes.Length == 0)
-            {
-                return typeNameBytes; // still nothing to append
-            }
+            if (messageBytes.Length == 0) return typeNameBytes;
             var buffer = new byte[typeNameBytes.Length + Delimiter.Length + messageBytes.Length];
             var span = buffer.AsSpan();
             typeNameBytes.CopyTo(span);
@@ -45,7 +43,6 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             return buffer;
         }
 
-        // Attribute based simple delimited serialization using @-@ between ordered properties.
         var props = _cache.GetOrAdd(type, t => [.. t.GetProperties()
             .Select(p => (p, attr: p.GetCustomAttribute<Attributes.UdpAttribute>()))
             .Where(x => x.attr != null)
@@ -53,30 +50,19 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             .OrderBy(x => x.Item2)]);
         if (props.Length == 0)
         {
-            // Fallback primitive/string ToString serialization
             return Encoding.UTF8.GetBytes(value.ToString() ?? string.Empty);
         }
 
-        // Pre-calc sizes and serialize each property (recursively) if complex
         var serializedProps = new byte[props.Length][];
         int total = 0;
         for (int i = 0; i < props.Length; i++)
         {
             var v = props[i].Prop.GetValue(value);
-            byte[] bytes;
-            if (v is null)
-            {
-                bytes = Array.Empty<byte>();
-            }
-            else if (IsPrimitiveLike(v.GetType()))
-            {
-                var s = v.ToString() ?? string.Empty;
-                bytes = Encoding.UTF8.GetBytes(s);
-            }
-            else
-            {
-                bytes = SerializeInternal(v); // recursive
-            }
+            byte[] bytes = v is null
+                ? Array.Empty<byte>()
+                : IsPrimitiveLike(v.GetType())
+                    ? Encoding.UTF8.GetBytes(v.ToString() ?? string.Empty)
+                    : SerializeInternal(v);
             serializedProps[i] = bytes;
             total += bytes.Length;
             if (i < props.Length - 1) total += Delimiter.Length;
@@ -109,19 +95,13 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 
     public object? Deserialize(Type type, ReadOnlySpan<byte> data)
     {
-        // Special case primitive-like root types (especially string) so we don't try to use constructors.
-        if (type == typeof(string))
-        {
-            return Encoding.UTF8.GetString(data);
-        }
+        if (type == typeof(string)) return Encoding.UTF8.GetString(data);
         if (IsPrimitiveLike(type) && type != typeof(string))
         {
-            // Interpret the whole slice as the textual form of the primitive.
             var strVal = Encoding.UTF8.GetString(data);
             return ConvertFromString(strVal, type);
         }
 
-        // Special handling for Envelope<T>
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Envelope<>))
         {
             var innerType = type.GetGenericArguments()[0];
@@ -175,16 +155,9 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
                 continue;
             }
 
-            if (IsPrimitiveLike(pType))
-            {
-                var str = Encoding.UTF8.GetString(slice);
-                args[i] = ConvertFromString(str, pType);
-            }
-            else
-            {
-                // Recursively deserialize complex/nested types.
-                args[i] = Deserialize(pType, slice);
-            }
+            args[i] = IsPrimitiveLike(pType)
+                ? ConvertFromString(Encoding.UTF8.GetString(slice), pType)
+                : Deserialize(pType, slice);
         }
         return ctor.Invoke(args);
     }
@@ -192,11 +165,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
     private static object? ConvertFromString(string value, Type targetType)
     {
         if (targetType == typeof(string)) return value;
-        if (targetType.IsEnum)
-        {
-            if (string.IsNullOrEmpty(value)) return Activator.CreateInstance(targetType);
-            return Enum.Parse(targetType, value, true);
-        }
+        if (targetType.IsEnum) return string.IsNullOrEmpty(value) ? Activator.CreateInstance(targetType) : Enum.Parse(targetType, value, true);
         if (targetType == typeof(Guid)) return string.IsNullOrEmpty(value) ? Guid.Empty : Guid.Parse(value);
         if (string.IsNullOrEmpty(value)) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
         return Convert.ChangeType(value, targetType);
@@ -208,7 +177,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
         int start = 0;
         while (start <= data.Length)
         {
-            if (temp.Count == maxParts - 1) // last part consumes rest
+            if (temp.Count == maxParts - 1)
             {
                 temp.Add((start, data.Length - start));
                 break;

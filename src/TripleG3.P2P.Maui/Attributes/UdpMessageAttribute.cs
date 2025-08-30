@@ -1,22 +1,23 @@
 namespace TripleG3.P2P.Maui.Attributes;
 
 /// <summary>
-/// Identifies a UDP message type and/or provides an override name used for the Envelope TypeName.
-/// If no name is provided the runtime <see cref="Type.Name"/> will be used. A generic version is supplied
-/// so that an alternate CLR type name can still map to a friendly protocol name consistently on both ends.
+/// Identifies a UDP message contract type and provides the protocol-visible name used during transport.
+/// If no name supplied, CLR <see cref="Type.Name"/> is used. Must be consistent between peers.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = false, Inherited = false)]
 public class UdpMessageAttribute : Attribute
 {
+    /// <summary>
+    /// Protocol type name override (null = use CLR name).
+    /// </summary>
     public string? Name { get; }
     public UdpMessageAttribute() {}
     public UdpMessageAttribute(string name) => Name = name;
 }
 
 /// <summary>
-/// Generic helper variant. When applied without a name it uses typeof(T).Name as the protocol name.
+/// Generic helper variant: when applied without an explicit name uses <c>typeof(T).Name</c>.
 /// </summary>
-/// <typeparam name="T">The CLR type whose name should be used if no explicit name is supplied.</typeparam>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class UdpMessageAttribute<T> : UdpMessageAttribute
 {

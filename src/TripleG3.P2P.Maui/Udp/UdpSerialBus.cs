@@ -10,20 +10,30 @@ using TripleG3.P2P.Maui.Serialization;
 
 namespace TripleG3.P2P.Maui.Udp;
 
-public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
+/// <summary>
+/// UDP implementation of <see cref="ISerialBus"/> providing fire-and-forget message transmission
+/// with attribute-driven dispatch and pluggable serialization protocols.
+/// </summary>
+public sealed partial class UdpSerialBus : ISerialBus, IDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
 
     private sealed record SubscriptionEntry(Type Type, Delegate Handler);
-    // Keyed by protocol type name (attribute Name or Type.Name) so matching is assembly-agnostic.
     private readonly ConcurrentDictionary<string, List<SubscriptionEntry>> _subscriptions = new(StringComparer.Ordinal);
 
     private UdpClient? _udpClient;
     private CancellationTokenSource? _cts;
     private ProtocolConfiguration? _config;
 
+    public UdpSerialBus(IEnumerable<IMessageSerializer> serializers)
+        => _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
+
+    /// <summary>
+    /// True if a UDP client is active and listening.
+    /// </summary>
     public bool IsListening => _udpClient != null;
 
+    /// <inheritdoc />
     public ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
     {
         if (IsListening) return ValueTask.CompletedTask;
@@ -50,7 +60,7 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
             }
             catch
             {
-                // swallow for now (fire & forget). Could add logging hook.
+                // Swallow to keep loop alive; replace with logging hook if desired.
             }
         }
     }
@@ -64,8 +74,7 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
 
         var protocolName = TryExtractTypeName(payload, header.SerializationProtocol);
         if (string.IsNullOrEmpty(protocolName)) return;
-
-        if (!_subscriptions.TryGetValue(protocolName, out var entries)) return; // nobody subscribed
+        if (!_subscriptions.TryGetValue(protocolName, out var entries)) return;
 
         foreach (var entry in entries)
         {
@@ -77,7 +86,7 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
             }
             catch
             {
-                continue; // try next entry
+                continue;
             }
             if (envelopeObj is null) continue;
             var messageProp = envelopeType.GetProperty("Message");
@@ -94,15 +103,13 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         {
             if (protocol == SerializationProtocol.None)
             {
-                // Envelope serialization (None): TypeName + Delimiter + message bytes (or just TypeName if no message)
                 var delimiter = Encoding.UTF8.GetBytes("@-@");
                 int idx = payload.IndexOf(delimiter);
-                if (idx < 0) return Encoding.UTF8.GetString(payload); // only type name present
+                if (idx < 0) return Encoding.UTF8.GetString(payload);
                 return Encoding.UTF8.GetString(payload[..idx]);
             }
             else if (protocol == SerializationProtocol.JsonRaw)
             {
-                // JSON: {"typeName":"X", "message":...}
                 using var doc = JsonDocument.Parse(payload.ToArray());
                 var root = doc.RootElement;
                 if (root.TryGetProperty("typeName", out var tn)) return tn.GetString();
@@ -111,7 +118,6 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         }
         catch
         {
-            // ignore extraction failure
         }
         return null;
     }
@@ -123,6 +129,7 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         return type.Name;
     }
 
+    /// <inheritdoc />
     public void SubscribeTo<T>(Action<T> handler)
     {
         var protocolName = GetProtocolTypeName(typeof(T));
@@ -130,6 +137,7 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         list.Add(new SubscriptionEntry(typeof(T), handler));
     }
 
+    /// <inheritdoc />
     public async ValueTask SendAsync<T>(T message, MessageType messageType = MessageType.Data, CancellationToken cancellationToken = default)
     {
         if (_udpClient is null) throw new InvalidOperationException("Not listening. StartListeningAsync first.");
@@ -147,6 +155,7 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         await _udpClient.SendAsync(buffer, buffer.Length, _config.RemoteEndPoint);
     }
 
+    /// <inheritdoc />
     public async ValueTask CloseConnectionAsync()
     {
         try { _cts?.Cancel(); } catch { }
@@ -155,6 +164,9 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         _udpClient = null;
     }
 
+    /// <summary>
+    /// Disposes socket and cancels the receive loop.
+    /// </summary>
     public void Dispose()
     {
         _udpClient?.Dispose();
@@ -162,6 +174,5 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         _cts?.Dispose();
     }
 
-    // Placeholder for reflection acquired generic method (not used directly but kept for potential optimization)
     private void ProcessEnvelope<T>(Envelope<T> envelope) { }
 }
