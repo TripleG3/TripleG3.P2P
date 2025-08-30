@@ -48,19 +48,6 @@ jobs:
 
       - name: Pack
         run: dotnet pack $PROJECT_PATH -c Release --no-build -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} -o ./artifacts
-
-      - name: Publish Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: nuget-packages
-          path: artifacts/*.nupkg
-
-      - name: Publish Symbols
-        uses: actions/upload-artifact@v4
-        with:
-          name: nuget-symbols
-          path: artifacts/*.snupkg
-
       - name: Push to NuGet.org
         if: success() && env.NUGET_SOURCE == 'https://api.nuget.org/v3/index.json'
         env:
@@ -84,15 +71,5 @@ jobs:
             dotnet nuget push $sym --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate || true
           done
 
-      - name: Create / Update GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: false
-          files: |
-            artifacts/*.nupkg
-            artifacts/*.snupkg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # NOTE: GitHub release creation intentionally removed. This workflow's
+  # sole responsibility is to build, pack and push packages to NuGet.org.
