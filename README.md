@@ -475,3 +475,154 @@ Issues & PRs welcome: add tests / samples for new serializers or transports.
 
 ---
 Happy messaging!
+
+---
+
+### Memory Pooling (Partially Implemented)
+
+The video pipeline now uses pooled buffers for:
+
+- FU‑A (fragmented) NAL reassembly (rents a buffer, grows, returns after NAL complete)
+- Consolidated frame (Annex B access unit) assembly via an `ArrayPoolFrame` inside `EncodedAccessUnit` (returned when disposed)
+- Intermediate single‑NAL copies (rented arrays tracked and released after frame consolidation)
+
+Why: Reduce allocation pressure & GC pauses under sustained 30/60fps streaming. Hundreds or even thousands of frame buffers per minute are efficiently recycled.
+
+Still Allocating:
+
+- Outbound RTP packet buffers (rented but not yet recycled by caller; future API may expose explicit return or custom pool)
+- Control / negotiation JSON payloads
+
+Guidance:
+Dispose each `EncodedAccessUnit` you create/receive (tests show `using var au = ...`). If you skip disposal, large buffers remain rented and the pool cannot reclaim them quickly.
+
+Planned refinements: size threshold to bypass pooling for very small frames, packet buffer recycling, allocation metrics counters.
+
+---
+
+## Experimental: Real-Time Video (H.264 over RTP)
+
+Early, evolving support for sending pre‑encoded H.264 access units (Annex B) over RTP/UDP.
+
+### Current Capabilities
+
+- H.264 packetization: single NAL + FU‑A (RFC 6184 subset)
+- Depacketization & reassembly to Annex B (start codes preserved)
+- Minimal RTCP: Sender Report (SR) + Receiver Report (RR) with RTT & fraction lost
+- Jitter, cumulative loss, fraction lost statistics (RFC3550 style)
+- Forward‑only reorder buffer (drops late retrograde packets)
+- Keyframe request path (PLI analogue) via control channel
+- Simple JSON negotiation (Offer/Answer + keyframe request) over injectable reliable channel
+- Pluggable payload cipher abstraction (NoOp / XOR test cipher)
+- Partial memory pooling & zero‑copy optimizations for frame assembly
+
+### Not Yet Implemented / Limitations
+
+- No NACK/RTX retransmissions, FEC, or packet pacing
+- No SRTP / DTLS keying (encryption is placeholder only)
+- No SPS/PPS out‑of‑band management (assumes stream already decodable at decoder)
+- No adaptive bitrate / congestion control (REMB/TCC/GCC)
+- Reorder buffer is simplistic (forward‑only)
+- Only H.264 (no VP8/VP9/AV1/H.265)
+- No simulcast / SVC layers, no audio, no A/V sync
+- No ICE/STUN/TURN NAT traversal (you must provide transport)
+
+### Essential Types
+
+| Type | Purpose |
+|------|---------|
+| `EncodedAccessUnit` | Represents one encoded frame (Annex B) + metadata; disposable (pooled buffer) |
+| `RtpVideoSender` | High-level sender: packetizes AUs, encrypts, emits RTP datagrams & sends SR |
+| `RtpVideoReceiver` | Consumes RTP / RTCP, reassembles frames, updates stats, raises `AccessUnitReceived` |
+| `H264RtpPacketizer` / `H264RtpDepacketizer` | Low-level packetization building blocks |
+| `NegotiationManager` | Offer/Answer & keyframe (PLI analogue) signaling |
+| `IVideoPayloadCipher` | Cipher abstraction (NoOp / XOR examples) |
+
+### Basic End‑to‑End Flow
+
+```csharp
+// Outbound network send hooks (wire these to your UDP socket send method)
+void SendRtp(ReadOnlySpan<byte> datagram) => udpSocket.SendTo(datagram.ToArray(), remoteRtpEndPoint);
+void SendRtcp(ReadOnlySpan<byte> datagram) => udpSocket.SendTo(datagram.ToArray(), remoteRtcpEndPoint);
+
+var sender = new RtpVideoSender(
+    ssrc: 0x1234_5678,
+    mtu: 1200,
+    cipher: new NoOpCipher(),
+    datagramOut: d => SendRtp(d.Span),
+    rtcpOut: d => SendRtcp(d.Span));
+
+var receiver = new RtpVideoReceiver(new NoOpCipher());
+receiver.AccessUnitReceived += au => {
+    try { Render(au); } finally { au.Dispose(); }
+};
+
+// For each encoded frame (Annex B) you obtain from your encoder:
+using var au = new EncodedAccessUnit(encodedAnnexBFrame, isKeyFrame, rtpTimestamp90k, captureTicks);
+sender.Send(au);
+
+// Periodically (every ~2s or on key events) send a Sender Report:
+sender.SendSenderReport(rtpTimestamp90k);
+
+// Incoming network data:
+void OnUdpData(byte[] buffer, int len)
+{
+    var span = new ReadOnlySpan<byte>(buffer,0,len);
+    if (Rtcp.IsRtcpPacket(span))
+    {
+        receiver.ProcessRtcp(span);
+        sender.ProcessRtcp(span); // so sender can compute RTT
+    }
+    else
+    {
+        receiver.ProcessRtp(span);
+    }
+}
+```
+
+### Negotiation & Keyframe Requests
+
+```csharp
+var chA = new InMemoryControlChannel();
+var chB = new InMemoryControlChannel();
+chA.MessageReceived += m => chB.SendReliableAsync(m);
+chB.MessageReceived += m => chA.SendReliableAsync(m);
+
+var offerer = new NegotiationManager(chA);
+var answerer = new NegotiationManager(chB);
+answerer.AttachEncoder(yourEncoder); // so remote PLI triggers RequestKeyFrame()
+
+await offerer.CreateOfferAsync(new VideoSessionConfig(1280,720, 2_000_000, 30));
+// After negotiation completes, either side can request a keyframe:
+offerer.RequestKeyFrame();
+```
+
+### Stats & RTT
+
+```csharp
+var senderStats = sender.GetStats();
+// senderStats.RttEstimateMs, PacketsSent, BytesSent
+var recvStats = receiver.GetStats();
+// recvStats.Jitter, PacketsLost, FractionLost (last interval), PacketsReceived
+```
+
+### Memory & Disposal
+
+Dispose every received `EncodedAccessUnit` *after* consuming its data. It returns the underlying pooled frame buffer to `ArrayPool<byte>`. If you retain frames (e.g., for rewind), copy out the bytes first with `au.AnnexB.ToArray()`.
+
+### Keyframe Logic
+
+Receiver issues `RequestKeyFrame()` on `NegotiationManager` (or directly via application logic) when:
+
+- Startup / first frame needed
+- Decoder error / corruption detected (you decide)
+
+The answering side invokes `encoder.RequestKeyFrame()` (you supply the encoder implementation) so the next access unit is a keyframe.
+
+### Roadmap Snapshot
+
+- Immediate: NACK/RTX, proper RTCP PLI/FIR packets, SRTP integration
+- Near-term: Bandwidth estimation (REMB/TCC) & adaptive send pacing
+- Later: ICE/STUN/TURN integration hooks, multi‑codec negotiation, richer jitter buffer
+
+APIs are experimental; expect adjustments.

@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TripleG3.P2P", "TripleG3.P2
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TripleG3.P2P.IntegrationTests", "..\tests\TripleG3.P2P.IntegrationTests\TripleG3.P2P.IntegrationTests.csproj", "{C2F7E5B2-5A4F-4C3F-9F3B-8B3A5D9D2E11}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TripleG3.P2P.VideoTests", "..\tests\TripleG3.P2P.VideoTests\TripleG3.P2P.VideoTests.csproj", "{8A6F1E8E-AB96-4E66-8F0F-6BC8D1F4C7AA}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
 	ProjectSection(SolutionItems) = preProject
 		..\.github\workflows\ci-release.yml = ..\.github\workflows\ci-release.yml
@@ -28,6 +30,10 @@ Global
 		{C2F7E5B2-5A4F-4C3F-9F3B-8B3A5D9D2E11}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C2F7E5B2-5A4F-4C3F-9F3B-8B3A5D9D2E11}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C2F7E5B2-5A4F-4C3F-9F3B-8B3A5D9D2E11}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8A6F1E8E-AB96-4E66-8F0F-6BC8D1F4C7AA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8A6F1E8E-AB96-4E66-8F0F-6BC8D1F4C7AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8A6F1E8E-AB96-4E66-8F0F-6BC8D1F4C7AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8A6F1E8E-AB96-4E66-8F0F-6BC8D1F4C7AA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
