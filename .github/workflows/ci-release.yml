@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-pack-publish:
@@ -31,7 +31,7 @@ jobs:
       - name: Restore
         run: dotnet restore $PROJECT_PATH
 
-      - name: Compute Version
+      - name: Compute Version (no file modification)
         id: version
         shell: pwsh
         run: |
@@ -39,38 +39,13 @@ jobs:
           $base = $xml.Project.PropertyGroup.Version
           if (-not $base) { Write-Error 'Could not read <Version> from csproj'; exit 1 }
           $parts = $base.Split('.')
-            if ($parts.Length -lt 2) { Write-Error "Unexpected version format: $base"; exit 1 }
+          if ($parts.Length -lt 2) { Write-Error "Unexpected version format: $base"; exit 1 }
           $major = $parts[0]
           $minor = $parts[1]
           $patch = $env:GITHUB_RUN_NUMBER
           $newVersion = "$major.$minor.$patch"
-          Write-Host "Resolved version: $newVersion (base $base)"
-          # Update the csproj <Version> element so subsequent build/pack sees the same version
-          try {
-            $xml.Project.PropertyGroup.Version = $newVersion
-            $xml.Save($env:PROJECT_PATH)
-            Write-Host "Updated $env:PROJECT_PATH to Version $newVersion"
-          } catch {
-            Write-Warning "Failed to write version back to project file: $_"
-          }
+          Write-Host "Resolved ephemeral package version: $newVersion (base $base)"
           "version=$newVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Commit version bump
-        if: always()
-        shell: bash
-        env:
-          COMMIT_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$PROJECT_PATH"
-          # If there are staged changes, commit and push using the workflow token credentials.
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "ci: update package version to $COMMIT_VERSION"
-            git push origin HEAD:main
-          fi
 
       - name: Build (Release)
         run: dotnet build $PROJECT_PATH -c Release -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
