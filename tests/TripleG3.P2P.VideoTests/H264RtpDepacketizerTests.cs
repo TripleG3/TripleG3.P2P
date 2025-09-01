@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using TripleG3.P2P.Video;
+using EncodedAccessUnit = TripleG3.P2P.Video.EncodedAccessUnit;
 using TripleG3.P2P.Video.Rtp;
 using TripleG3.P2P.Video.Security;
 using Xunit;
@@ -17,13 +18,13 @@ public class H264RtpDepacketizerTests
         byte[] nal = new byte[2000];
         nal[0] = 0x65; for(int i=1;i<nal.Length;i++) nal[i]=(byte)(i%200);
         var annexB = new byte[4+nal.Length]; annexB[3]=1; Buffer.BlockCopy(nal,0,annexB,4,nal.Length);
-    using var au = new EncodedAccessUnit(annexB,true,90000,0);
-        var pktizer = new H264RtpPacketizer(0x1,1200,new NoOpCipher());
+    using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annexB,true,90000,0);
+        var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x1,1200,new TripleG3.P2P.Video.Security.NoOpCipher());
         var packets = pktizer.Packetize(au).ToList();
         Assert.True(packets.Count>1);
         // Drop middle packet
         packets.RemoveAt(1);
-        var dep = new H264RtpDepacketizer(new NoOpCipher());
+    var dep = new TripleG3.P2P.Video.Rtp.H264RtpDepacketizer(new TripleG3.P2P.Video.Security.NoOpCipher());
         foreach (var p in packets)
         {
             dep.TryProcessPacket(p.Span, out var _);
@@ -45,7 +46,7 @@ public class H264RtpDepacketizerTests
         var p2 = pktizer.Packetize(au2).ToList();
         var dep = new H264RtpDepacketizer(new NoOpCipher());
         // With new receiver reorder integrated we test via receiver
-        var recv = new RtpVideoReceiver(new NoOpCipher());
+    var recv = new TripleG3.P2P.Video.Rtp.RtpVideoReceiver(new TripleG3.P2P.Video.Security.NoOpCipher());
         var delivered = new List<uint>();
         recv.AccessUnitReceived += au => delivered.Add(au.Timestamp90k);
         // send out of order
@@ -56,8 +57,8 @@ public class H264RtpDepacketizerTests
     // Older frame may be dropped due to simple forward-only reorder buffer; acceptable for baseline.
     }
 
-    private static EncodedAccessUnit BuildAu(byte[] nal, uint ts)
+    private static TripleG3.P2P.Video.EncodedAccessUnit BuildAu(byte[] nal, uint ts)
     {
-        var annex = new byte[4+nal.Length]; annex[3]=1; Buffer.BlockCopy(nal,0,annex,4,nal.Length); return new EncodedAccessUnit(annex, (nal[0]&0x1F)==5, ts,0);
+        var annex = new byte[4+nal.Length]; annex[3]=1; Buffer.BlockCopy(nal,0,annex,4,nal.Length); return new TripleG3.P2P.Video.EncodedAccessUnit(annex, (nal[0]&0x1F)==5, ts,0);
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using TripleG3.P2P.Video;
+using EncodedAccessUnit = TripleG3.P2P.Video.EncodedAccessUnit;
 using TripleG3.P2P.Video.Rtp;
 using TripleG3.P2P.Video.Security;
 using Xunit;
@@ -19,8 +20,8 @@ public class H264RtpPacketizerTests
         // Annex B framing: start code + nal
         var annexB = new byte[4 + largeNal.Length];
         annexB[0]=0; annexB[1]=0; annexB[2]=0; annexB[3]=1; Buffer.BlockCopy(largeNal,0,annexB,4,largeNal.Length);
-    using var au = new EncodedAccessUnit(annexB, true, 90000, 0);
-    var packetizer = new H264RtpPacketizer(0x12345678, 1200, new NoOpCipher());
+    using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annexB, true, 90000, 0);
+    var packetizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x12345678, 1200, new TripleG3.P2P.Video.Security.NoOpCipher());
     var packets = packetizer.Packetize(au).ToList();
         Assert.True(packets.Count > 1); // fragmented
         // Last packet marker bit should be set

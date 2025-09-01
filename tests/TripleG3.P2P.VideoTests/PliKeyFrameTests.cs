@@ -10,15 +10,15 @@ public class PliKeyFrameTests
     private sealed class FakeEncoder : IVideoEncoder
     {
         public event Action<EncodedAccessUnit>? AccessUnitReady { add {} remove {} }
-        public bool KeyRequested; 
+        public bool KeyRequested;
         public void RequestKeyFrame() { KeyRequested = true; }
     }
 
     [Fact]
     public async Task Pli_Triggers_Keyframe_Request_On_Remote()
     {
-        var chA = new InMemoryControlChannel();
-        var chB = new InMemoryControlChannel();
+    var chA = new TripleG3.P2P.Video.InMemoryControlChannel();
+    var chB = new TripleG3.P2P.Video.InMemoryControlChannel();
         chA.MessageReceived += m => chB.SendReliableAsync(m);
         chB.MessageReceived += m => chA.SendReliableAsync(m);
         var mgrA = new NegotiationManager(chA);

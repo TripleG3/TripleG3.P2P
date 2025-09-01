@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using TripleG3.P2P.Video.Security;
+using Microsoft.Extensions.Logging;
 
 namespace TripleG3.P2P.Video.Rtp;
 
@@ -9,14 +10,16 @@ public sealed class H264RtpDepacketizer
 {
     private readonly Dictionary<uint, FrameAssembly> _frames = new(); // timestamp -> assembly
     private readonly IVideoPayloadCipher _cipher;
+    private readonly ILogger<H264RtpDepacketizer>? _log;
     private readonly int _maxFrames = 32;
 
-    public H264RtpDepacketizer(IVideoPayloadCipher cipher) => _cipher = cipher;
+    public H264RtpDepacketizer(IVideoPayloadCipher cipher, ILogger<H264RtpDepacketizer>? log = null) { _cipher = cipher; _log = log; }
 
     /// <summary>Process raw RTP datagram. If a complete frame is assembled returns true with AU.</summary>
     public bool TryProcessPacket(ReadOnlySpan<byte> datagram, out EncodedAccessUnit au)
     {
         au = default;
+        try { _log?.LogDebug("H264RtpDepacketizer.TryProcessPacket len={Len}", datagram.Length); } catch { }
         if (!RtpPacket.TryParse(datagram, out var pkt)) return false;
         var meta = new RtpPacketMetadata(pkt.Timestamp, pkt.SequenceNumber, pkt.Ssrc, pkt.Marker);
         // Decrypt payload (in-place buffer)

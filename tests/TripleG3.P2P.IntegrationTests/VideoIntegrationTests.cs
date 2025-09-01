@@ -2,10 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using TripleG3.P2P.Video;
-using TripleG3.P2P.Video.Rtp;
-using TripleG3.P2P.Video.Security;
-using TripleG3.P2P.Video.Negotiation;
 using Xunit;
 
 namespace TripleG3.P2P.IntegrationTests;
@@ -20,7 +16,7 @@ public class VideoIntegrationTests
         foreach (var nal in nals)
         {
             buf[o++] = 0; buf[o++] = 0; buf[o++] = 0; buf[o++] = 1;
-            Buffer.BlockCopy(nal,0,buf,o,nal.Length);
+            Buffer.BlockCopy(nal, 0, buf, o, nal.Length);
             o += nal.Length;
         }
         return buf;
@@ -29,24 +25,24 @@ public class VideoIntegrationTests
     [Fact]
     public void EndToEnd_Video_Frames_RoundTrip_With_Large_And_Small_NALs()
     {
-        var cipher = new NoOpCipher();
+        var cipher = new TripleG3.P2P.Video.Security.NoOpCipher();
         var rtpPackets = new List<ReadOnlyMemory<byte>>();
         var rtcpPackets = new List<ReadOnlyMemory<byte>>();
-        var sender = new RtpVideoSender(0x77, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
-        var receiver = new RtpVideoReceiver(cipher);
-        var receivedFrames = new List<EncodedAccessUnit>();
-        receiver.AccessUnitReceived += au => receivedFrames.Add(au);
+        var sender = new TripleG3.P2P.Video.RtpVideoSender(0x77, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
+        var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
+        var receivedFrames = new List<TripleG3.P2P.Video.EncodedAccessUnit>();
+    receiver.FrameReceived += au => { if (au is not null) receivedFrames.Add(au.Value); };
 
         // Build frames: keyframe large (> MTU) + two small delta
-        var keyNal = new byte[3000]; keyNal[0] = 0x65; for(int i=1;i<keyNal.Length;i++) keyNal[i] = (byte)(i%250);
-        var delta1 = new byte[]{0x61,1,2,3,4,5};
-        var delta2 = new byte[]{0x61,9,8,7,6,5,4};
+        var keyNal = new byte[3000]; keyNal[0] = 0x65; for (int i = 1; i < keyNal.Length; i++) keyNal[i] = (byte)(i % 250);
+        var delta1 = new byte[] { 0x61, 1, 2, 3, 4, 5 };
+        var delta2 = new byte[] { 0x61, 9, 8, 7, 6, 5, 4 };
         var f1 = BuildAnnexB(keyNal);
         var f2 = BuildAnnexB(delta1);
         var f3 = BuildAnnexB(delta2);
-        using var au1 = new EncodedAccessUnit(f1, true, 0, 0);
-        using var au2 = new EncodedAccessUnit(f2, false, 3000, 0);
-        using var au3 = new EncodedAccessUnit(f3, false, 6000, 0);
+        using var au1 = new TripleG3.P2P.Video.EncodedAccessUnit(f1, true, 0, 0);
+        using var au2 = new TripleG3.P2P.Video.EncodedAccessUnit(f2, false, 3000, 0);
+        using var au3 = new TripleG3.P2P.Video.EncodedAccessUnit(f3, false, 6000, 0);
 
         sender.Send(au1);
         sender.Send(au2);
@@ -63,11 +59,11 @@ public class VideoIntegrationTests
         Assert.Equal(f3, receivedFrames[2].AnnexB.ToArray());
 
         // Stats sanity
-        var sStats = sender.GetStats();
-        var rStats = receiver.GetStats();
-        Assert.Equal((uint)rtpPackets.Count, sStats.PacketsSent);
-        Assert.Equal((uint)rtpPackets.Count, rStats.PacketsReceived);
-        Assert.True(rStats.Jitter >= 0);
+    var sStats = sender.GetStats();
+    var rStats = receiver.GetStats();
+    Assert.Equal((uint)rtpPackets.Count, sStats?.PacketsSent ?? 0);
+    Assert.Equal((uint)rtpPackets.Count, rStats?.PacketsReceived ?? 0);
+    Assert.True((rStats?.Jitter ?? 0) >= 0);
 
         // Dispose received frames to release pooled buffers
         foreach (var rf in receivedFrames) rf.Dispose();
@@ -76,15 +72,15 @@ public class VideoIntegrationTests
     [Fact]
     public void Rtcp_Rtt_And_FractionLost_Computed()
     {
-        var cipher = new NoOpCipher();
+        var cipher = new TripleG3.P2P.Video.Security.NoOpCipher();
         var rtpPackets = new List<ReadOnlyMemory<byte>>();
         var rtcpPackets = new List<ReadOnlyMemory<byte>>();
-        var sender = new RtpVideoSender(0x99, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
-        var receiver = new RtpVideoReceiver(cipher);
+        var sender = new TripleG3.P2P.Video.RtpVideoSender(0x99, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
+        var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
 
-        // Build a large frame fragmented into multiple packets
-        var nal = new byte[2500]; nal[0] = 0x65; for(int i=1;i<nal.Length;i++) nal[i]=(byte)(i%200);
-        using var au = new EncodedAccessUnit(BuildAnnexB(nal), true, 10000, 0);
+        // NAL with arbitrary content, just for packetization
+        var nal = new byte[2500]; nal[0] = 0x65; for (int i = 1; i < nal.Length; i++) nal[i] = (byte)(i % 200);
+        using var au = new TripleG3.P2P.Video.EncodedAccessUnit(BuildAnnexB(nal), true, 10000, 0);
         sender.Send(au);
         // Drop one middle RTP packet to simulate loss (if >2 packets)
         if (rtpPackets.Count > 2) rtpPackets.RemoveAt(1);
@@ -100,27 +96,27 @@ public class VideoIntegrationTests
         Assert.NotNull(rrBytes);
         sender.ProcessRtcp(rrBytes!);
 
-        var sStats = sender.GetStats();
-        var rStats = receiver.GetStats();
-        Assert.True(sStats.RttEstimateMs.HasValue);
+    var sStats = sender.GetStats();
+    var rStats = receiver.GetStats();
+    Assert.True(sStats?.RttEstimateMs.HasValue == true);
         // Loss accounting: if we dropped a packet, PacketsLost >=1
-        if (rtpPackets.Count > 1) Assert.True(rStats.PacketsLost >= 0);
+    if (rtpPackets.Count > 1) Assert.True((rStats?.PacketsLost ?? 0) >= 0);
     }
 
     [Fact]
     public async Task Negotiation_Keyframe_Request_Invokes_Encoder()
     {
-        var chOffer = new InMemoryControlChannel();
-        var chAnswer = new InMemoryControlChannel();
+    var chOffer = new TripleG3.P2P.Video.InMemoryControlChannel();
+    var chAnswer = new TripleG3.P2P.Video.InMemoryControlChannel();
         chOffer.MessageReceived += m => chAnswer.SendReliableAsync(m);
         chAnswer.MessageReceived += m => chOffer.SendReliableAsync(m);
-        var offerMgr = new NegotiationManager(chOffer);
-        var answerMgr = new NegotiationManager(chAnswer);
+        var offerMgr = new TripleG3.P2P.Video.Negotiation.NegotiationManager(chOffer);
+        var answerMgr = new TripleG3.P2P.Video.Negotiation.NegotiationManager(chAnswer);
 
         var fakeEnc = new TestEncoder();
         answerMgr.AttachEncoder(fakeEnc);
 
-        await offerMgr.CreateOfferAsync(new VideoSessionConfig(640,360,400_000,30));
+    await offerMgr.CreateOfferAsync(new TripleG3.P2P.Video.VideoSessionConfig(640, 360, 400_000, 30));
         // allow messages
         await Task.Delay(50);
         offerMgr.RequestKeyFrame();
@@ -128,9 +124,9 @@ public class VideoIntegrationTests
         Assert.True(fakeEnc.KeyRequested);
     }
 
-    private sealed class TestEncoder : IVideoEncoder
+    private sealed class TestEncoder : TripleG3.P2P.Video.IVideoEncoder
     {
-        public bool KeyRequested; public event Action<EncodedAccessUnit>? AccessUnitReady { add { } remove { } }
+        public bool KeyRequested; public event Action<TripleG3.P2P.Video.EncodedAccessUnit>? AccessUnitReady { add { } remove { } }
         public void RequestKeyFrame() => KeyRequested = true;
     }
 }

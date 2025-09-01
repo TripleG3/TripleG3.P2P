@@ -9,6 +9,18 @@ namespace TripleG3.P2P.Video;
 public readonly record struct EncodedAccessUnit(ReadOnlyMemory<byte> AnnexB, bool IsKeyFrame, uint Timestamp90k, long CaptureTicks, IPooledFrame? Pooled = null) : IDisposable
 {
 	public void Dispose() => Pooled?.Dispose();
+
+	/// <summary>
+	/// TimestampTicks replicates the older Primitives.EncodedAccessUnit property (capture ticks).
+	/// </summary>
+	public long TimestampTicks => CaptureTicks;
+
+	public static EncodedAccessUnit FromAnnexB(ReadOnlyMemory<byte> annexB, long timestampTicks, bool isKeyFrame, int width, int height, TripleG3.P2P.Video.Primitives.CodecKind codec)
+	{
+		// Map capture ticks to CaptureTicks and Timestamp90k calculation is left to callers where needed.
+		uint ts90 = (uint)((timestampTicks * 90000) / TimeSpan.TicksPerSecond);
+		return new EncodedAccessUnit(annexB, isKeyFrame, ts90, timestampTicks, null);
+	}
 }
 
 /// <summary>Ownership wrapper for a pooled frame buffer.</summary>
