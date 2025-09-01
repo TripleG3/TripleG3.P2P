@@ -22,15 +22,15 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 
 ## Features At A Glance
 
-- Multi-target (net9.0 + net9.0-android + net9.0-ios + net9.0-maccatalyst + conditional windows)
+- Target framework: `net9.0` (single TFM here; platform heads handled by MAUI host project)
 - 8‑byte header layout (Length / MessageType / SerializationProtocol)
 - Attribute ordered property serialization with stable delimiter `@-@`
 - Automatic Envelope wrapping so handlers receive strong types directly
-- Multiple simultaneous protocol instances (e.g. Delimited + JSON in sample)
+- Multiple simultaneous protocol instances (Delimited + JSON) via separate buses
 - Multi-endpoint broadcast (one `SendAsync` -> N peers)
 - Plug-in serializer model (`IMessageSerializer`)
 - Graceful cancellation / disposal
-- NEW: TCP transport (reliable stream) alongside UDP; same API
+- TCP transport (reliable stream) alongside UDP; same API
 - FTP transport placeholder (factory method exists; not implemented yet)
 
 ### Transport Summary
@@ -47,25 +47,27 @@ Use UDP when you need lowest overhead and can tolerate loss; use TCP when you ne
 
 ## Installation
 
-NuGet (once published):
+Install from NuGet:
 
 ```bash
 dotnet add package TripleG3.P2P
 ```
 
-Or reference the project directly while developing.
+Symbols are published; enable source stepping to debug internals.
+
+### Versioning & CI
+
+CI rewrites the patch component using the GitHub Actions run number. Base `<Version>` in the csproj should be updated only for major/minor increments (e.g. `1.1.0` / `2.0.0`). Published versions become `Major.Minor.RunNumber` and the workflow commits the updated version back without re-triggering.
 
 ---
 
-## Target Frameworks
-
-Current `TargetFrameworks`:
+## Target Framework
 
 ```text
 net9.0
 ```
 
-Pick the one you consume in your app; NuGet tooling selects the right asset.
+MAUI/platform variants are produced in a sibling project; this core library stays lean.
 
 ---
 
@@ -166,6 +168,17 @@ await sender.SendAsync(new Person("carol", 27, new Address("2 Ave", "Metro")));
 Concurrency: safe to invoke `SendAsync` concurrently; the underlying UDP socket will serialize sends. Out-of-order arrival is still possible (UDP). If ordering matters, include sequence numbers inside your messages.
 
 Reliability Disclaimer: UDP does not guarantee delivery / ordering. The library only guarantees *attempted* one-shot fan-out; implement retries / ACK at the message layer if required.
+
+### Dependency Injection
+
+Register UDP components:
+
+```csharp
+services.AddP2PUdp(); // Registers None + JsonRaw serializers and UDP bus
+var bus = services.BuildServiceProvider().GetRequiredService<ISerialBus>();
+```
+
+Need TCP as well? Use `SerialBusFactory.CreateTcp()` (a combined DI extension can be added later).
 
 ### Envelope (Generic)
 
@@ -351,9 +364,19 @@ class MyBinarySerializer : IMessageSerializer {
     public object? Deserialize(Type t, ReadOnlySpan<byte> data) { /* parse */ }
 }
 ```
-Register by supplying it to `SerialBusFactory` (extend or create your own factory method mirroring the built-in one).
+Registration options:
+
+1. Extend `SerialBusFactory` with a helper that injects your serializer.
+2. Or (DI) register it as another `IMessageSerializer`; the bus chooses by `Protocol` enum value.
+
+Best practices:
+
+- Keep format deterministic & version tolerant.
+- Reuse buffers; avoid per-message large allocations.
+- Reserve new enum value before shipping (ensure both sides understand it).
 
 ---
+
 ## Error Handling & Resilience
 
 - Receive loop swallows unexpected exceptions to keep the socket alive (add logging hook where `catch { }` blocks exist if needed)
@@ -361,6 +384,7 @@ Register by supplying it to `SerialBusFactory` (extend or create your own factor
 - Individual subscriber exceptions do not block other handlers
 
 ---
+
 ## Performance Notes
 
 - Header parsing uses `BinaryPrimitives` on a single span
@@ -369,6 +393,7 @@ Register by supplying it to `SerialBusFactory` (extend or create your own factor
 - Envelope design avoids repeated type discovery; only `TypeName` string extracted first
 
 ---
+
 ## Extending To Other Transports
 
 Transport abstraction lives behind `ISerialBus`.
@@ -620,6 +645,38 @@ Receiver issues `RequestKeyFrame()` on `NegotiationManager` (or directly via app
 The answering side invokes `encoder.RequestKeyFrame()` (you supply the encoder implementation) so the next access unit is a keyframe.
 
 ### Roadmap Snapshot
+
+### Logging & Diagnostics
+
+Add logging (video pipeline & new code paths use `Microsoft.Extensions.Logging`):
+
+```csharp
+services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
+```
+
+### Security Note (Video Ciphers)
+
+`NoOpCipher` & `XorTestCipher` are NOT secure. They exist only for testing. Use a proper SRTP / DTLS-SRTP layer for real encryption (on roadmap).
+
+### Creating a New Transport
+
+1. Implement `ISerialBus` (mirror UDP/TCP structure).
+2. Accept an `IEnumerable<IMessageSerializer>`.
+3. Preserve the 8‑byte header (or version it explicitly).
+4. Provide a `SerialBusFactory.CreateX()` helper.
+5. Add integration tests: start, send, broadcast, mixed serializers.
+6. Update README & bump minor version.
+
+### MAUI Integration
+
+In `MauiProgram.CreateMauiApp`:
+
+```csharp
+builder.Services.AddP2PUdp();
+builder.Services.AddLogging(b => b.AddDebug());
+```
+
+Inject `ISerialBus` into pages / services. Handle disposal on shutdown for clean socket release.
 
 - Immediate: NACK/RTX, proper RTCP PLI/FIR packets, SRTP integration
 - Near-term: Bandwidth estimation (REMB/TCC) & adaptive send pacing
