@@ -10,10 +10,10 @@ public sealed class H264RtpPacketizer
     private readonly RtpSequenceNumberGenerator _seq = new();
     private readonly uint _ssrc;
     private readonly int _mtu;
-    private readonly IVideoPayloadCipher _cipher;
+    private readonly Video.Security.IVideoPayloadCipher _cipher;
     private const byte PayloadType = 96; // dynamic
 
-    public H264RtpPacketizer(uint ssrc, int mtu, IVideoPayloadCipher cipher)
+    public H264RtpPacketizer(uint ssrc, int mtu, Video.Security.IVideoPayloadCipher cipher)
     {
         _ssrc = ssrc; _mtu = mtu; _cipher = cipher;
     }

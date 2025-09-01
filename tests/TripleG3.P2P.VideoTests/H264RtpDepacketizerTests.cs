@@ -41,10 +41,10 @@ public class H264RtpDepacketizerTests
         byte[] nal2 = {0x61,4,5,6};
     using var au1 = BuildAu(nal1,1000);
     using var au2 = BuildAu(nal2,2000);
-        var pktizer = new H264RtpPacketizer(0x2,1200,new NoOpCipher());
+    var pktizer = new H264RtpPacketizer(0x2,1200,new TripleG3.P2P.Video.Security.NoOpCipher());
         var p1 = pktizer.Packetize(au1).ToList();
         var p2 = pktizer.Packetize(au2).ToList();
-        var dep = new H264RtpDepacketizer(new NoOpCipher());
+    var dep = new H264RtpDepacketizer(new TripleG3.P2P.Video.Security.NoOpCipher());
         // With new receiver reorder integrated we test via receiver
     var recv = new TripleG3.P2P.Video.Rtp.RtpVideoReceiver(new TripleG3.P2P.Video.Security.NoOpCipher());
         var delivered = new List<uint>();

@@ -2,24 +2,53 @@ using System.Buffers;
 namespace TripleG3.P2P.Video;
 
 /// <summary>
-/// Represents a complete encoded video access unit (frame) in Annex B format (start codes present).
-/// Timestamp90k: RTP 90kHz clock timestamp associated with this frame.
-/// CaptureTicks: raw capture stopwatch ticks for latency measurements.
+/// Stable public representation of one encoded video frame (Annex B access unit: start codes + NAL sequence).
+/// Use <see cref="RtpTimestamp90k"/> for RTP clock time (90 kHz) and <see cref="CaptureTicks"/> for original capture ticks.
+/// Disposing returns the pooled buffer (if owned). Double-dispose is safe/no-op.
 /// </summary>
-public readonly record struct EncodedAccessUnit(ReadOnlyMemory<byte> AnnexB, bool IsKeyFrame, uint Timestamp90k, long CaptureTicks, IPooledFrame? Pooled = null) : IDisposable
+public readonly struct EncodedAccessUnit : IDisposable
 {
-	public void Dispose() => Pooled?.Dispose();
+	/// <summary>Annex B bytes (do not mutate).</summary>
+	public ReadOnlyMemory<byte> AnnexB { get; }
+	/// <summary>Whether this frame is a key frame (IDR / recovery point).</summary>
+	public bool IsKeyFrame { get; }
+	/// <summary>Associated RTP timestamp in the 90 kHz clock domain.</summary>
+	public uint RtpTimestamp90k { get; }
+	/// <summary>Original capture time in Stopwatch ticks (for latency measurement).</summary>
+	public long CaptureTicks { get; }
+	private readonly IPooledFrame? _pooled;
 
-	/// <summary>
-	/// TimestampTicks replicates the older Primitives.EncodedAccessUnit property (capture ticks).
-	/// </summary>
-	public long TimestampTicks => CaptureTicks;
+	// Legacy compatibility property still used internally by packetizer; keep name.
+	internal uint Timestamp90k => RtpTimestamp90k;
 
-	public static EncodedAccessUnit FromAnnexB(ReadOnlyMemory<byte> annexB, long timestampTicks, bool isKeyFrame, int width, int height, TripleG3.P2P.Video.Primitives.CodecKind codec)
+	/// <summary>Create an access unit from an Annex B buffer (caller supplies timestamp/capture info).</summary>
+	public EncodedAccessUnit(ReadOnlyMemory<byte> annexB, bool isKeyFrame, uint rtpTimestamp90k, long captureTicks)
 	{
-		// Map capture ticks to CaptureTicks and Timestamp90k calculation is left to callers where needed.
-		uint ts90 = (uint)((timestampTicks * 90000) / TimeSpan.TicksPerSecond);
-		return new EncodedAccessUnit(annexB, isKeyFrame, ts90, timestampTicks, null);
+		AnnexB = annexB;
+		IsKeyFrame = isKeyFrame;
+		RtpTimestamp90k = rtpTimestamp90k;
+		CaptureTicks = captureTicks;
+		_pooled = null;
+	}
+
+	/// <summary>Internal constructor allowing a pooled frame wrapper.</summary>
+	internal EncodedAccessUnit(IPooledFrame pooled, int length, bool isKeyFrame, uint rtpTimestamp90k, long captureTicks)
+	{
+		AnnexB = pooled.Memory.Slice(0, length);
+		IsKeyFrame = isKeyFrame;
+		RtpTimestamp90k = rtpTimestamp90k;
+		CaptureTicks = captureTicks;
+		_pooled = pooled;
+	}
+
+	/// <summary>Dispose returns the rented buffer (if any) to the shared pool.</summary>
+	public void Dispose() => _pooled?.Dispose();
+
+	/// <summary>Create from capture ticks (helper) computing RTP timestamp (90k) from wall clock ticks.</summary>
+	public static EncodedAccessUnit FromAnnexB(ReadOnlyMemory<byte> annexB, long captureTicks, bool isKeyFrame)
+	{
+		uint ts90 = (uint)((captureTicks * 90000) / TimeSpan.TicksPerSecond);
+		return new EncodedAccessUnit(annexB, isKeyFrame, ts90, captureTicks);
 	}
 }
 

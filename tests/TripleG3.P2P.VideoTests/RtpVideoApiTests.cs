@@ -24,7 +24,7 @@ namespace TripleG3.P2P.VideoTests
             annex[0] = 0; annex[1] = 0; annex[2] = 0; annex[3] = 1;
             Array.Copy(nal, 0, annex, 4, nal.Length);
             var ticks = DateTime.UtcNow.Ticks;
-            using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annex, true, (uint)((ticks * 90000) / TimeSpan.TicksPerSecond), ticks, null);
+            using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annex, true, (uint)((ticks * 90000) / TimeSpan.TicksPerSecond), ticks);
             var pkts = packetizer.Packetize(au, 96, 0x1234).ToList();
             Assert.True(pkts.Count > 1);
             // all packets non-null
@@ -42,7 +42,7 @@ namespace TripleG3.P2P.VideoTests
             var nal = new byte[300]; nal[0] = 0x65;
             var annex = new byte[4 + nal.Length]; annex[0]=0; annex[1]=0; annex[2]=0; annex[3]=1; Array.Copy(nal,0,annex,4,nal.Length);
             var ticks2 = DateTime.UtcNow.Ticks;
-            using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annex, true, (uint)((ticks2 * 90000) / TimeSpan.TicksPerSecond), ticks2, null);
+            using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annex, true, (uint)((ticks2 * 90000) / TimeSpan.TicksPerSecond), ticks2);
             var pkts = packetizer.Packetize(au, 96, 0x1234).ToList();
             TripleG3.P2P.Video.EncodedAccessUnit? outAu = null;
             foreach (var p in pkts)
@@ -62,7 +62,7 @@ namespace TripleG3.P2P.VideoTests
             var ticks = TimeSpan.TicksPerSecond;
             var au = EncodedAccessUnitFactory.FromAnnexB(new ReadOnlyMemory<byte>(new byte[]{0,0,0,1,0x65}), ticks, true, 0,0, CodecKind.H264);
             // internal mapping in Packetizer is private; replicate formula
-            uint ts = (uint)((au.TimestampTicks * 90000) / TimeSpan.TicksPerSecond);
+            uint ts = au.RtpTimestamp90k;
             Assert.Equal(90000u, ts);
             au.Dispose();
         }

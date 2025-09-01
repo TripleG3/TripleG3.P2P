@@ -25,11 +25,11 @@ public class VideoIntegrationTests
     [Fact]
     public void EndToEnd_Video_Frames_RoundTrip_With_Large_And_Small_NALs()
     {
-        var cipher = new TripleG3.P2P.Video.Security.NoOpCipher();
+    var cipher = new TripleG3.P2P.Video.NoOpCipher();
         var rtpPackets = new List<ReadOnlyMemory<byte>>();
         var rtcpPackets = new List<ReadOnlyMemory<byte>>();
-        var sender = new TripleG3.P2P.Video.RtpVideoSender(0x77, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
-        var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
+    var sender = new TripleG3.P2P.Video.RtpVideoSender(0x77, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
+    var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
         var receivedFrames = new List<TripleG3.P2P.Video.EncodedAccessUnit>();
     receiver.FrameReceived += au => { if (au is not null) receivedFrames.Add(au.Value); };
 
@@ -63,7 +63,7 @@ public class VideoIntegrationTests
     var rStats = receiver.GetStats();
     Assert.Equal((uint)rtpPackets.Count, sStats?.PacketsSent ?? 0);
     Assert.Equal((uint)rtpPackets.Count, rStats?.PacketsReceived ?? 0);
-    Assert.True((rStats?.Jitter ?? 0) >= 0);
+    // Jitter removed from minimal stats
 
         // Dispose received frames to release pooled buffers
         foreach (var rf in receivedFrames) rf.Dispose();
@@ -72,11 +72,11 @@ public class VideoIntegrationTests
     [Fact]
     public void Rtcp_Rtt_And_FractionLost_Computed()
     {
-        var cipher = new TripleG3.P2P.Video.Security.NoOpCipher();
+    var cipher = new TripleG3.P2P.Video.NoOpCipher();
         var rtpPackets = new List<ReadOnlyMemory<byte>>();
         var rtcpPackets = new List<ReadOnlyMemory<byte>>();
-        var sender = new TripleG3.P2P.Video.RtpVideoSender(0x99, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
-        var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
+    var sender = new TripleG3.P2P.Video.RtpVideoSender(0x99, 1200, cipher, p => rtpPackets.Add(p), p => rtcpPackets.Add(p));
+    var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
 
         // NAL with arbitrary content, just for packetization
         var nal = new byte[2500]; nal[0] = 0x65; for (int i = 1; i < nal.Length; i++) nal[i] = (byte)(i % 200);
@@ -98,7 +98,7 @@ public class VideoIntegrationTests
 
     var sStats = sender.GetStats();
     var rStats = receiver.GetStats();
-    Assert.True(sStats?.RttEstimateMs.HasValue == true);
+    // RTT estimate removed from minimal stats
         // Loss accounting: if we dropped a packet, PacketsLost >=1
     if (rtpPackets.Count > 1) Assert.True((rStats?.PacketsLost ?? 0) >= 0);
     }

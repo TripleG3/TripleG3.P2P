@@ -9,11 +9,11 @@ namespace TripleG3.P2P.Video.Rtp;
 public sealed class H264RtpDepacketizer
 {
     private readonly Dictionary<uint, FrameAssembly> _frames = new(); // timestamp -> assembly
-    private readonly IVideoPayloadCipher _cipher;
+    private readonly Video.Security.IVideoPayloadCipher _cipher;
     private readonly ILogger<H264RtpDepacketizer>? _log;
     private readonly int _maxFrames = 32;
 
-    public H264RtpDepacketizer(IVideoPayloadCipher cipher, ILogger<H264RtpDepacketizer>? log = null) { _cipher = cipher; _log = log; }
+    public H264RtpDepacketizer(Video.Security.IVideoPayloadCipher cipher, ILogger<H264RtpDepacketizer>? log = null) { _cipher = cipher; _log = log; }
 
     /// <summary>Process raw RTP datagram. If a complete frame is assembled returns true with AU.</summary>
     public bool TryProcessPacket(ReadOnlySpan<byte> datagram, out EncodedAccessUnit au)
@@ -47,7 +47,7 @@ public sealed class H264RtpDepacketizer
                     offset += nal.Length;
                 }
                 bool isKey = assembly.IsKeyFrame;
-                au = new EncodedAccessUnit(frame.Memory.Slice(0,total), isKey, pkt.Timestamp, 0, frame);
+                au = new EncodedAccessUnit(frame, total, isKey, pkt.Timestamp, 0);
                 // release intermediate NAL buffers now that consolidated frame allocated
                 assembly.ReleaseAll();
                 _frames.Remove(pkt.Timestamp);

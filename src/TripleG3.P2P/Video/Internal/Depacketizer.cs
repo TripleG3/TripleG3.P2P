@@ -81,7 +81,7 @@ namespace TripleG3.P2P.Video.Internal
                 // prepend 0x000001
                 buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 1;
                 payload.CopyTo(new Span<byte>(buf, 4, payload.Length));
-                au = new TripleG3.P2P.Video.EncodedAccessUnit(new ReadOnlyMemory<byte>(buf, 0, payload.Length + 4), false, ts, (long)ts * TimeSpan.TicksPerSecond / 90000, new TripleG3.P2P.Video.ArrayPoolFrame(payload.Length + 4));
+                au = new TripleG3.P2P.Video.EncodedAccessUnit(new TripleG3.P2P.Video.ArrayPoolFrame(payload.Length + 4), payload.Length + 4, false, ts, (long)ts * TimeSpan.TicksPerSecond / 90000);
                 return true;
             }
         }
@@ -101,7 +101,7 @@ namespace TripleG3.P2P.Video.Internal
                 ArrayPool<byte>.Shared.Return(b);
             }
             _fragments.Clear();
-            var au = new TripleG3.P2P.Video.EncodedAccessUnit(new ReadOnlyMemory<byte>(outBuf, 0, pos), false, ts, (long)ts * TimeSpan.TicksPerSecond / 90000, new TripleG3.P2P.Video.ArrayPoolFrame(pos));
+            var au = new TripleG3.P2P.Video.EncodedAccessUnit(new TripleG3.P2P.Video.ArrayPoolFrame(pos), pos, false, ts, (long)ts * TimeSpan.TicksPerSecond / 90000);
             return au;
         }
     }

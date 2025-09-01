@@ -646,6 +646,56 @@ The answering side invokes `encoder.RequestKeyFrame()` (you supply the encoder i
 
 ### Roadmap Snapshot
 
+## Minimal RTP Video API (Stable Surface)
+
+Verbatim stable signatures exposed in `TripleG3.P2P.Video` namespace:
+
+```csharp
+public sealed class EncodedAccessUnit : IDisposable
+{
+    public EncodedAccessUnit(ReadOnlyMemory<byte> annexB, bool isKeyFrame, uint rtpTimestamp90k, long captureTicks);
+    public ReadOnlyMemory<byte> AnnexB { get; }
+    public bool IsKeyFrame { get; }
+    public uint RtpTimestamp90k { get; }
+    public long CaptureTicks { get; }
+    public void Dispose();
+}
+
+public interface IVideoPayloadCipher
+{
+    int OverheadBytes { get; }
+    int Encrypt(Span<byte> buffer);
+    int Decrypt(Span<byte> buffer);
+}
+
+public sealed class NoOpCipher : IVideoPayloadCipher { /* OverheadBytes=0; pass-through */ }
+
+public sealed class RtpVideoSender
+{
+    public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut, Action<ReadOnlyMemory<byte>>? rtcpOut = null);
+    public void Send(EncodedAccessUnit au);
+    public void SendSenderReport(uint rtpTimestamp90k);
+    public void ProcessRtcp(ReadOnlySpan<byte> packet);
+    public RtpVideoSenderStats GetStats(); // optional lightweight stats
+}
+
+public sealed class RtpVideoReceiver
+{
+    public RtpVideoReceiver(IVideoPayloadCipher cipher);
+    public event Action<EncodedAccessUnit> AccessUnitReceived;
+    public void ProcessRtp(ReadOnlySpan<byte> packet);
+    public void ProcessRtcp(ReadOnlySpan<byte> packet);
+    public RtpVideoReceiverStats GetStats();
+}
+
+public static class Rtcp
+{
+    public static bool IsRtcpPacket(ReadOnlySpan<byte> packet);
+}
+```
+
+These are intended for direct consumption by `TripleG3.Camera.Maui` without reflection.
+
 ### Logging & Diagnostics
 
 Add logging (video pipeline & new code paths use `Microsoft.Extensions.Logging`):

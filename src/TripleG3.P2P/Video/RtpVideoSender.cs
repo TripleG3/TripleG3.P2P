@@ -16,7 +16,7 @@ namespace TripleG3.P2P.Video
     /// <summary>
     /// High-level RTP video sender that packetizes Annex-B access units and sends RTP over UDP.
     /// </summary>
-    public sealed class RtpVideoSender : IRtpVideoSender
+    public sealed class RtpVideoSender : IDisposable
     {
         private readonly RtpVideoSenderConfig _config;
         private readonly ICipher? _cipher;
@@ -29,7 +29,7 @@ namespace TripleG3.P2P.Video
     private TripleG3.P2P.Video.Rtp.RtpVideoSender? _legacyImpl;
         private readonly SequenceNumberGenerator _seq = new SequenceNumberGenerator();
 
-        public event Action<RtpVideoSenderStats>? StatsAvailable;
+    public event Action<RtpVideoSenderStats>? StatsAvailable;
         private readonly System.Threading.Timer? _statsTimer;
         private long _packetsSent;
         private long _bytesSent;
@@ -48,28 +48,22 @@ namespace TripleG3.P2P.Video
             _statsTimer = new System.Threading.Timer(_ => EmitStats(), null, intervalMs, intervalMs);
         }
 
-        // Compatibility constructor for legacy tests that previously used the old RtpVideoSender(ssrc, mtu, cipher, datagramOut) shape.
-        // This creates an internal packetizer and captures outgoing datagrams via the provided callbacks.
-        public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut)
-            : this(new RtpVideoSenderConfig { Ssrc = ssrc, Mtu = mtu }, cipher as ICipher, null)
-        {
-            _datagramOutCompat = datagramOut;
-            // instantiate legacy impl for full feature compatibility used by existing tests
-            try
-            {
-                _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoSender(ssrc, mtu, cipher, datagramOut);
-            }
-            catch { }
-        }
-
-        public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut, Action<ReadOnlyMemory<byte>> rtcpOut)
-            : this(new RtpVideoSenderConfig { Ssrc = ssrc, Mtu = mtu }, cipher as ICipher, null)
+        /// <summary>
+        /// Stable minimal API constructor: provide SSRC, MTU, cipher, and RTP (and optional RTCP) output delegates.
+        /// </summary>
+        public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut, Action<ReadOnlyMemory<byte>>? rtcpOut = null)
+            : this(new RtpVideoSenderConfig { Ssrc = ssrc, Mtu = mtu }, null, null)
         {
             _datagramOutCompat = datagramOut;
             _rtcpOutCompat = rtcpOut;
+            // legacy impl for richer behavior (stats / RTCP) if available
             try
             {
-                _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoSender(ssrc, mtu, cipher, datagramOut, rtcpOut);
+                var legacyCipher = new CipherAdapter(cipher);
+                if (rtcpOut is null)
+                    _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoSender(ssrc, mtu, (Video.Security.IVideoPayloadCipher)legacyCipher, datagramOut);
+                else
+                    _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoSender(ssrc, mtu, (Video.Security.IVideoPayloadCipher)legacyCipher, datagramOut, rtcpOut);
             }
             catch { }
         }
@@ -97,10 +91,20 @@ namespace TripleG3.P2P.Video
             _legacyImpl?.ProcessRtcp(packet);
         }
 
-        public TripleG3.P2P.Video.Stats.VideoStreamStats? GetStats()
+        /// <summary>Optional simple stats (packet/frame counters).</summary>
+        public RtpVideoSenderStats GetStats()
         {
-            if (_legacyImpl != null) return _legacyImpl.GetStats();
-            return null;
+            if (_legacyImpl != null)
+            {
+                var s = _legacyImpl.GetStats();
+                if (s != null) return new RtpVideoSenderStats { PacketsSent = s.PacketsSent, BytesSent = s.BytesSent, AUsSent = (uint)Interlocked.Read(ref _ausSent) };
+            }
+            return new RtpVideoSenderStats
+            {
+                PacketsSent = (uint)Interlocked.Read(ref _packetsSent),
+                BytesSent = (uint)Interlocked.Read(ref _bytesSent),
+                AUsSent = (uint)Interlocked.Read(ref _ausSent)
+            };
         }
 
         public async Task<bool> SendAsync(EncodedAccessUnit au, CancellationToken ct = default)
@@ -138,22 +142,12 @@ namespace TripleG3.P2P.Video
             _udp.Dispose();
         }
 
-        private void EmitStats()
+    private void EmitStats()
         {
             try
             {
-                if (StatsAvailable == null) return;
-                var stats = new RtpVideoSenderStats
-                {
-                    Timestamp = DateTimeOffset.UtcNow,
-                    BitrateKbps = Math.Round((Interlocked.Read(ref _bytesSent) * 8.0) / 1000.0, 2),
-                    PacketsSent = (uint)Interlocked.Read(ref _packetsSent),
-                    AUsSent = (uint)Interlocked.Read(ref _ausSent),
-                    FrameRate = (double)Interlocked.Read(ref _ausSent) / 2.0,
-                    NacksReceived = 0,
-                    RetransmitPercent = 0
-                };
-                StatsAvailable?.Invoke(stats);
+        if (StatsAvailable == null) return;
+        StatsAvailable?.Invoke(GetStats());
                 // reset counters for next interval
                 Interlocked.Exchange(ref _bytesSent, 0);
                 Interlocked.Exchange(ref _packetsSent, 0);

@@ -29,7 +29,7 @@ public sealed class RtpVideoReceiver : IRtpVideoReceiver
     private byte _lastFractionLost;
     private uint _lastTransit; // for jitter calc
     private uint _clockRate = 90000; // H264 assumed
-    public RtpVideoReceiver(IVideoPayloadCipher cipher, ILogger<RtpVideoReceiver>? log = null)
+    public RtpVideoReceiver(Video.Security.IVideoPayloadCipher cipher, ILogger<RtpVideoReceiver>? log = null)
     { _log = log; _depacketizer = new H264RtpDepacketizer(cipher); }
 
     public void ProcessRtp(ReadOnlySpan<byte> datagram)

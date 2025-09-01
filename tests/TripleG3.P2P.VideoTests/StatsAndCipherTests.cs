@@ -15,7 +15,7 @@ public class StatsAndCipherTests
     ReadOnlyMemory<byte>? received = null;
 
     // Packetize and feed receiver directly (no UDP)
-    var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.Security.NoOpCipher());
+    var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.NoOpCipher());
     // new EncodedAccessUnit has AnnexB property (record struct). Use AnnexB directly.
     receiver.FrameReceived += a => received = a?.AnnexB;
 
@@ -35,12 +35,12 @@ public class StatsAndCipherTests
         using var au = new TripleG3.P2P.Video.EncodedAccessUnit(annex, true, 90000u, 0);
 
         var packets = new List<System.ReadOnlyMemory<byte>>();
-        var sender = new TripleG3.P2P.Video.RtpVideoSender(0x22u, 1200, new TripleG3.P2P.Video.Security.NoOpCipher(), p => packets.Add(p));
+    var sender = new TripleG3.P2P.Video.RtpVideoSender(0x22u, 1200, new TripleG3.P2P.Video.NoOpCipher(), p => packets.Add(p));
         sender.Send(au);
 
         Assert.True(packets.Count >= 1);
 
-        var recv = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.Security.NoOpCipher());
+    var recv = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.NoOpCipher());
         int delivered = 0; recv.FrameReceived += _ => delivered++;
         foreach (var p in packets) recv.ProcessRtp(p.Span);
 

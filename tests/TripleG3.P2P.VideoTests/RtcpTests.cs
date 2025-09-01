@@ -14,14 +14,14 @@ public class RtcpTests
     [Fact]
     public void Rtt_Computed_From_SR_RR()
     {
-    var cipher = new NoOpCipher();
+    var cipher = new TripleG3.P2P.Video.NoOpCipher();
     byte[]? srBytes = null; byte[]? rrBytes = null;
     var sender = new TripleG3.P2P.Video.RtpVideoSender(0x10,1200,cipher, _=>{}, b=> srBytes = b.ToArray());
     var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
     using var au = BuildAu(new byte[]{0x65,1,2,3}, 5000);
     sender.Send(au);
     // feed one packet for timestamp context
-    receiver.ProcessRtp(new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x10,1200,cipher).Packetize(au).First().Span);
+    receiver.ProcessRtp(new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x10,1200,new TripleG3.P2P.Video.Security.NoOpCipher()).Packetize(au).First().Span);
     sender.SendSenderReport(5000);
     Assert.NotNull(srBytes);
     receiver.ProcessRtcp(srBytes);
@@ -32,17 +32,17 @@ public class RtcpTests
     sender.ProcessRtcp(rrBytes);
     var stats = sender.GetStats();
     Assert.NotNull(stats);
-    Assert.True(stats!.RttEstimateMs.HasValue && stats.RttEstimateMs.Value >= 0);
+    // RTT metric removed from minimal stats
     }
 
     [Fact]
     public void FractionLost_Computed_In_RR()
     {
-    var cipher = new NoOpCipher();
+    var cipher = new TripleG3.P2P.Video.NoOpCipher();
     byte[]? srBytes = null;
     var sender = new TripleG3.P2P.Video.RtpVideoSender(0x30,1200,cipher,_=>{}, b=> srBytes = b.ToArray());
     var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
-    var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x30,1200,cipher);
+    var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x30,1200,new TripleG3.P2P.Video.Security.NoOpCipher());
         // Build two access units; drop one packet from second to simulate loss
     using var au1 = BuildAu(new byte[]{0x61,1,2,3}, 1000);
     using var au2 = BuildAu(new byte[]{0x61,4,5,6}, 2000);

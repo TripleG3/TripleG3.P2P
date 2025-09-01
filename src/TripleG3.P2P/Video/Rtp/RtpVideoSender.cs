@@ -17,10 +17,10 @@ public sealed class RtpVideoSender : IRtpVideoSender
     private uint _lastSrCompact;
     private DateTime _lastRrReceivedAt;
     private uint _ssrc;
-    public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut)
+    public RtpVideoSender(uint ssrc, int mtu, Video.Security.IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut)
     { _ssrc = ssrc; _packetizer = new H264RtpPacketizer(ssrc, mtu, cipher); _datagramOut = datagramOut; }
 
-    public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut, Action<ReadOnlyMemory<byte>> rtcpOut)
+    public RtpVideoSender(uint ssrc, int mtu, Video.Security.IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut, Action<ReadOnlyMemory<byte>> rtcpOut)
     { _ssrc = ssrc; _packetizer = new H264RtpPacketizer(ssrc, mtu, cipher); _datagramOut = datagramOut; _rtcpOut = rtcpOut; }
 
     public void Send(EncodedAccessUnit au)

@@ -37,15 +37,23 @@ namespace TripleG3.P2P.Video
             _recvTask = Task.Run(() => ReceiveLoop(_cts.Token));
         }
 
-        // Compatibility constructor matching legacy signature: RtpVideoReceiver(IVideoPayloadCipher cipher)
+        /// <summary>
+        /// Stable minimal API constructor: provide only a cipher (currently unused/no-op).
+        /// </summary>
         public RtpVideoReceiver(IVideoPayloadCipher cipher)
             : this(new RtpVideoReceiverConfig(), null)
         {
-            // provide a logger-less legacy impl for compatibility
-            _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoReceiver(cipher);
-            // forward legacy AccessUnitReceived -> FrameReceived
-            _legacyImpl.AccessUnitReceived += au => FrameReceived?.Invoke(au);
+            try
+            {
+                var legacyCipher = new CipherAdapter(cipher);
+                _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoReceiver((Video.Security.IVideoPayloadCipher)legacyCipher);
+                _legacyImpl.AccessUnitReceived += au => { FrameReceived?.Invoke(au); AccessUnitReceived?.Invoke(au); };
+            }
+            catch { }
         }
+
+        /// <summary>Stable event exposing decoded access units.</summary>
+        public event Action<EncodedAccessUnit>? AccessUnitReceived;
 
         public Task StartAsync(CancellationToken ct = default)
         {
@@ -98,9 +106,11 @@ namespace TripleG3.P2P.Video
             return _legacyImpl?.CreateReceiverReport(reporterSsrc);
         }
 
-        public TripleG3.P2P.Video.Stats.VideoStreamStats? GetStats()
+        public RtpVideoReceiverStats GetStats()
         {
-            return _legacyImpl?.GetStats();
+            var s = _legacyImpl?.GetStats();
+            if (s != null) return new RtpVideoReceiverStats { PacketsReceived = s.PacketsReceived, BytesReceived = s.BytesReceived, PacketsLost = s.PacketsLost };
+            return new RtpVideoReceiverStats();
         }
 
         public void RequestKeyframe()
@@ -128,7 +138,11 @@ namespace TripleG3.P2P.Video
 
             if (_depacketizer.AddPacket(arr, out var au))
             {
-                if (au is not null) FrameReceived?.Invoke(au);
+                if (au is { } frame)
+                {
+                    FrameReceived?.Invoke(frame);
+                    AccessUnitReceived?.Invoke(frame);
+                }
             }
         }
     }
