@@ -60,7 +60,7 @@ public sealed class NegotiationManager : IVideoSessionController
         return Task.CompletedTask;
     }
 
-    public void RequestKeyFrame() => SendAsync(NegotiationTypes.Pli, new { }).ConfigureAwait(false);
+    public void RequestKeyFrame() => SendAsync(NegotiationTypes.Pli, new { });
 
     private Task SendAsync(string type, object payload)
     {

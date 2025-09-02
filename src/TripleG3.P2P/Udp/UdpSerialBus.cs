@@ -51,7 +51,7 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
         {
             try
             {
-                var result = await _udpClient.ReceiveAsync(token).ConfigureAwait(false);
+                var result = await _udpClient.ReceiveAsync(token);
                 ProcessIncoming(result.Buffer);
             }
             catch (OperationCanceledException)
@@ -162,7 +162,7 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
             if (!sentTo.Add(key)) return; // already scheduled
             try
             {
-                await _udpClient.SendAsync(buffer, buffer.Length, ep).ConfigureAwait(false);
+                await _udpClient.SendAsync(buffer, buffer.Length, ep);
             }
             catch
             {
