@@ -21,7 +21,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 
     private byte[] SerializeInternal(object? value, Type? declaredType = null)
     {
-        if (value is null) return Array.Empty<byte>();
+        if (value is null) return [];
         var type = value.GetType();
 
         // Envelope<T>
@@ -59,7 +59,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
         {
             var v = props[i].Prop.GetValue(value);
             byte[] bytes = v is null
-                ? Array.Empty<byte>()
+                ? []
                 : IsPrimitiveLike(v.GetType())
                     ? Encoding.UTF8.GetBytes(v.ToString() ?? string.Empty)
                     : SerializeInternal(v);
@@ -111,7 +111,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             if (idx < 0)
             {
                 typeName = Encoding.UTF8.GetString(data);
-                messageData = ReadOnlySpan<byte>.Empty;
+                messageData = [];
             }
             else
             {
@@ -141,7 +141,7 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
         for (int i = 0; i < parameters.Length; i++)
         {
             var pType = parameters[i].ParameterType;
-            ReadOnlySpan<byte> slice = ReadOnlySpan<byte>.Empty;
+            ReadOnlySpan<byte> slice = [];
             if (i < parts.Length)
             {
                 var (start, len) = parts[i];

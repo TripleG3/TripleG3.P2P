@@ -14,9 +14,9 @@ namespace TripleG3.P2P.Udp;
 /// UDP implementation of <see cref="ISerialBus"/> providing fire-and-forget message transmission
 /// with attribute-driven dispatch and pluggable serialization protocols.
 /// </summary>
-public sealed partial class UdpSerialBus : ISerialBus, IDisposable
+public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
 
     private sealed record SubscriptionEntry(Type Type, Delegate Handler);
     private readonly ConcurrentDictionary<string, List<SubscriptionEntry>> _subscriptions = new(StringComparer.Ordinal);
@@ -24,9 +24,6 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
     private UdpClient? _udpClient;
     private CancellationTokenSource? _cts;
     private ProtocolConfiguration? _config;
-
-    public UdpSerialBus(IEnumerable<IMessageSerializer> serializers)
-        => _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
 
     /// <summary>
     /// True if a UDP client is active and listening.

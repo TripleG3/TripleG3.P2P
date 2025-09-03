@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using TripleG3.P2P.Video;
 using TripleG3.P2P.Video.Negotiation;
 using Xunit;

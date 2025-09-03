@@ -15,9 +15,9 @@ namespace TripleG3.P2P.Tcp;
 /// and outgoing connections to the configured <see cref="ProtocolConfiguration.RemoteEndPoint"/> plus any <see cref="ProtocolConfiguration.BroadcastEndPoints"/>.
 /// Connections are established lazily on first send; inbound accepted sockets are added to the connection set for fan-out.
 /// </summary>
-public sealed class TcpSerialBus : ISerialBus, IDisposable
+public sealed class TcpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
     private ProtocolConfiguration? _config;
     private CancellationTokenSource? _cts;
     private TcpListener? _listener;
@@ -28,9 +28,6 @@ public sealed class TcpSerialBus : ISerialBus, IDisposable
     // Active outbound / inbound connections
     private readonly ConcurrentDictionary<string, TcpClient> _clients = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _connectLock = new(1,1);
-
-    public TcpSerialBus(IEnumerable<IMessageSerializer> serializers)
-        => _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
 
     public bool IsListening => _listener != null;
 

@@ -1,5 +1,3 @@
-using System;
-
 namespace TripleG3.P2P.Security
 {
     public sealed class NoOpCipher : ICipher

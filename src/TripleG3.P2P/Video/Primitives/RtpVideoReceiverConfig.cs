@@ -1,5 +1,3 @@
-using System;
-
 namespace TripleG3.P2P.Video.Primitives
 {
     public sealed class RtpVideoReceiverConfig

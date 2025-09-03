@@ -1,11 +1,9 @@
-using System.Threading;
-
 namespace TripleG3.P2P.Video.Internal
 {
-    internal sealed class SequenceNumberGenerator
+    internal sealed class SequenceNumberGenerator(int seed = 0)
     {
-        private int _value;
-        public SequenceNumberGenerator(int seed = 0) => _value = seed & 0xFFFF;
+        private int _value = seed & 0xFFFF;
+
         public ushort Next() => (ushort)Interlocked.Increment(ref _value);
     }
 }

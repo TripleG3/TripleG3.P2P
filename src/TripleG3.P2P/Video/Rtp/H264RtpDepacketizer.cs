@@ -1,30 +1,25 @@
 using System.Buffers;
-using System.Buffers.Binary;
 using TripleG3.P2P.Video.Security;
 using Microsoft.Extensions.Logging;
 
 namespace TripleG3.P2P.Video.Rtp;
 
 /// <summary>Reassembles H264 Annex B access units from RTP packets (single NAL + FU-A).</summary>
-public sealed class H264RtpDepacketizer
+public sealed class H264RtpDepacketizer(Video.Security.IVideoPayloadCipher cipher, ILogger<H264RtpDepacketizer>? log = null)
 {
     private readonly Dictionary<uint, FrameAssembly> _frames = new(); // timestamp -> assembly
-    private readonly Video.Security.IVideoPayloadCipher _cipher;
-    private readonly ILogger<H264RtpDepacketizer>? _log;
     private readonly int _maxFrames = 32;
-
-    public H264RtpDepacketizer(Video.Security.IVideoPayloadCipher cipher, ILogger<H264RtpDepacketizer>? log = null) { _cipher = cipher; _log = log; }
 
     /// <summary>Process raw RTP datagram. If a complete frame is assembled returns true with AU.</summary>
     public bool TryProcessPacket(ReadOnlySpan<byte> datagram, out EncodedAccessUnit au)
     {
         au = default;
-        try { _log?.LogDebug("H264RtpDepacketizer.TryProcessPacket len={Len}", datagram.Length); } catch { }
+        try { log?.LogDebug("H264RtpDepacketizer.TryProcessPacket len={Len}", datagram.Length); } catch { }
         if (!RtpPacket.TryParse(datagram, out var pkt)) return false;
         var meta = new RtpPacketMetadata(pkt.Timestamp, pkt.SequenceNumber, pkt.Ssrc, pkt.Marker);
         // Decrypt payload (in-place buffer)
         Span<byte> tmp = stackalloc byte[Math.Min(pkt.Payload.Length, 2048)]; // for small; larger allocate
-        ReadOnlySpan<byte> payload = pkt.Payload.Length <= tmp.Length ? _cipher.Decrypt(meta, pkt.Payload, tmp) : DecryptLarge(meta, pkt.Payload);
+        ReadOnlySpan<byte> payload = pkt.Payload.Length <= tmp.Length ? cipher.Decrypt(meta, pkt.Payload, tmp) : DecryptLarge(meta, pkt.Payload);
 
         var assembly = GetOrCreateFrame(pkt.Timestamp);
         if (!ProcessNalFragment(assembly, payload))
@@ -65,7 +60,7 @@ public sealed class H264RtpDepacketizer
         // Large payloads: allocate a dedicated buffer; copies avoided elsewhere dominate anyway.
         var arr = new byte[payload.Length];
         var span = arr.AsSpan();
-        _cipher.Decrypt(meta, payload, span);
+        cipher.Decrypt(meta, payload, span);
         return span;
     }
 

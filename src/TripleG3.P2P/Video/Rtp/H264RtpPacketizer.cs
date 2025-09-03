@@ -1,22 +1,13 @@
 using System.Buffers;
-using TripleG3.P2P.Video.Rtp;
 using TripleG3.P2P.Video.Security;
 
 namespace TripleG3.P2P.Video.Rtp;
 
 /// <summary>Converts H264 Annex B access units into RTP packets (RFC 6184, single NAL & FU-A only).</summary>
-public sealed class H264RtpPacketizer
+public sealed class H264RtpPacketizer(uint ssrc, int mtu, Video.Security.IVideoPayloadCipher cipher)
 {
     private readonly RtpSequenceNumberGenerator _seq = new();
-    private readonly uint _ssrc;
-    private readonly int _mtu;
-    private readonly Video.Security.IVideoPayloadCipher _cipher;
     private const byte PayloadType = 96; // dynamic
-
-    public H264RtpPacketizer(uint ssrc, int mtu, Video.Security.IVideoPayloadCipher cipher)
-    {
-        _ssrc = ssrc; _mtu = mtu; _cipher = cipher;
-    }
 
     public IEnumerable<ReadOnlyMemory<byte>> Packetize(EncodedAccessUnit au)
     {
@@ -37,18 +28,18 @@ public sealed class H264RtpPacketizer
     private IEnumerable<ReadOnlyMemory<byte>> PacketizeNal(byte[] nal, bool isLastNalOfAu, uint timestamp)
     {
         // Single NAL if fits
-        int maxPayload = _mtu - RtpPacket.HeaderLength;
+        int maxPayload = mtu - RtpPacket.HeaderLength;
         if (nal.Length <= maxPayload)
         {
             var rent = ArrayPool<byte>.Shared.Rent(RtpPacket.HeaderLength + nal.Length);
             var span = rent.AsSpan();
             var seq = _seq.Next();
-            RtpPacket.WriteHeader(span, marker: isLastNalOfAu, payloadType: PayloadType, seq, timestamp, _ssrc);
+            RtpPacket.WriteHeader(span, marker: isLastNalOfAu, payloadType: PayloadType, seq, timestamp, ssrc);
             var payloadDest = span.Slice(RtpPacket.HeaderLength, nal.Length);
             new ReadOnlySpan<byte>(nal).CopyTo(payloadDest);
             // Encrypt (output into same buffer)
-            var meta = new RtpPacketMetadata(timestamp, seq, _ssrc, isLastNalOfAu);
-            _cipher.Encrypt(meta, payloadDest, payloadDest);
+            var meta = new RtpPacketMetadata(timestamp, seq, ssrc, isLastNalOfAu);
+            cipher.Encrypt(meta, payloadDest, payloadDest);
             yield return new Memory<byte>(rent, 0, RtpPacket.HeaderLength + nal.Length);
             yield break;
         }
@@ -69,7 +60,7 @@ public sealed class H264RtpPacketizer
             bool lastFragment = payloadRemaining - fragmentPayload == 0;
             bool marker = lastFragment && isLastNalOfAu;
             var seq = _seq.Next();
-            RtpPacket.WriteHeader(span, marker, PayloadType, seq, timestamp, _ssrc);
+            RtpPacket.WriteHeader(span, marker, PayloadType, seq, timestamp, ssrc);
             // FU indicator
             span[RtpPacket.HeaderLength] = (byte)(forbidden | nri | 28); // FU-A type 28
             // FU header
@@ -79,8 +70,8 @@ public sealed class H264RtpPacketizer
             span[RtpPacket.HeaderLength + 1] = fuHeader;
             var fragSpan = span.Slice(RtpPacket.HeaderLength + 2, fragmentPayload);
             new ReadOnlySpan<byte>(nal, offset, fragmentPayload).CopyTo(fragSpan);
-            var meta = new RtpPacketMetadata(timestamp, seq, _ssrc, marker);
-            _cipher.Encrypt(meta, fragSpan, fragSpan);
+            var meta = new RtpPacketMetadata(timestamp, seq, ssrc, marker);
+            cipher.Encrypt(meta, fragSpan, fragSpan);
             yield return new Memory<byte>(rent, 0, RtpPacket.HeaderLength + 2 + fragmentPayload);
             offset += fragmentPayload;
             payloadRemaining -= fragmentPayload;

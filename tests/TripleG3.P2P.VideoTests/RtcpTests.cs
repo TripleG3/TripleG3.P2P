@@ -1,7 +1,3 @@
-using System.Linq;
-using System.Threading;
-using TripleG3.P2P.Video;
-using TripleG3.P2P.Video.Security;
 using Xunit;
 
 namespace TripleG3.P2P.VideoTests;
