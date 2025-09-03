@@ -1,17 +1,15 @@
 namespace TripleG3.P2P.Video.Rtp;
 
 /// <summary>Simple in-order release buffer for small reordering windows.</summary>
-internal sealed class RtpReorderBuffer
+internal sealed class RtpReorderBuffer(int capacity)
 {
     private readonly SortedDictionary<ushort, byte[]> _store = new();
-    private readonly int _capacity;
     private ushort? _expected;
-    public RtpReorderBuffer(int capacity) => _capacity = capacity;
 
     public void Add(ushort seq, byte[] packet)
     {
         _store[seq] = packet;
-        if (_store.Count > _capacity)
+        if (_store.Count > capacity)
         {
             var first = _store.First();
             if (_expected.HasValue && first.Key != _expected.Value)

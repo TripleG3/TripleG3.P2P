@@ -1,5 +1,4 @@
 using System.Net;
-using TripleG3.P2P.Core;
 
 namespace TripleG3.P2P.Core;
 
@@ -19,7 +18,7 @@ public sealed class ProtocolConfiguration
     /// The <see cref="RemoteEndPoint"/> is always included implicitly; duplicates are de-duplicated
     /// by endpoint string representation (address:port).
     /// </summary>
-    public IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; } = Array.Empty<IPEndPoint>();
+    public IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; } = [];
 
     /// <summary>
     /// Local UDP port to bind for inbound messages.

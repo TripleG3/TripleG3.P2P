@@ -58,16 +58,11 @@ public interface IPooledFrame : IDisposable
 	Memory<byte> Memory { get; }
 }
 
-internal sealed class ArrayPoolFrame : IPooledFrame
+internal sealed class ArrayPoolFrame(int size) : IPooledFrame
 {
-	private byte[]? _buffer;
-	private readonly int _length;
-	public ArrayPoolFrame(int size)
-	{
-		_buffer = ArrayPool<byte>.Shared.Rent(size);
-		_length = size;
-	}
-	public Memory<byte> Memory => _buffer == null ? Memory<byte>.Empty : _buffer.AsMemory(0, _length);
+	private byte[]? _buffer = ArrayPool<byte>.Shared.Rent(size);
+
+    public Memory<byte> Memory => _buffer == null ? Memory<byte>.Empty : _buffer.AsMemory(0, size);
 	public void Dispose()
 	{
 		var buf = _buffer;

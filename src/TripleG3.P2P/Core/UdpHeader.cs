@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using TripleG3.P2P.Attributes;
 
 namespace TripleG3.P2P.Core;
 

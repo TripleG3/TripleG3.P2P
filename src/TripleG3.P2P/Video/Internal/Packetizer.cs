@@ -1,23 +1,14 @@
-using System;
 using System.Buffers;
-using System.Collections.Generic;
 // ...existing code...
 
 namespace TripleG3.P2P.Video.Internal
 {
-    internal sealed class Packetizer
+    internal sealed class Packetizer(int mtu, SequenceNumberGenerator seq)
     {
-        private readonly int _mtu;
-        private readonly SequenceNumberGenerator _seq;
-
-        public Packetizer(int mtu, SequenceNumberGenerator seq)
-        {
-            _mtu = mtu;
-            _seq = seq;
-        }
+        private readonly SequenceNumberGenerator _seq = seq;
 
         // Simple RTP header builder (no CSRC, no extensions). Returns a list of packets (each as byte[] rented).
-    public IEnumerable<ArraySegment<byte>> Packetize(TripleG3.P2P.Video.EncodedAccessUnit au, int payloadType, uint ssrc)
+        public IEnumerable<ArraySegment<byte>> Packetize(TripleG3.P2P.Video.EncodedAccessUnit au, int payloadType, uint ssrc)
         {
             // convert timestamp ticks -> 90kHz clock
             uint ts = au.Timestamp90k;
@@ -27,7 +18,7 @@ namespace TripleG3.P2P.Video.Internal
                 var nal = nalUnits[ni];
                 var nalSpan = nal.AsSpan();
                 bool isLastNalOfAu = (ni + 1) == nalUnits.Count;
-                if (nalSpan.Length + 12 <= _mtu)
+                if (nalSpan.Length + 12 <= mtu)
                 {
                     // single NAL RTP packet
                     var pkt = ArrayPool<byte>.Shared.Rent(nalSpan.Length + 12);
@@ -59,7 +50,7 @@ namespace TripleG3.P2P.Video.Internal
                 {
                     // FU-A fragmentation
                     int headerSize = 2; // FU indicator + FU header
-                    int payloadPerPacket = _mtu - 12 - headerSize;
+                    int payloadPerPacket = mtu - 12 - headerSize;
                     int remaining = nalSpan.Length - 1; // skip original NAL header in FU payload
                     byte nalHeader = nalSpan[0];
                     int pos = 1;

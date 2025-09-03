@@ -14,9 +14,9 @@ namespace TripleG3.P2P.Udp;
 /// UDP implementation of <see cref="ISerialBus"/> providing fire-and-forget message transmission
 /// with attribute-driven dispatch and pluggable serialization protocols.
 /// </summary>
-public sealed partial class UdpSerialBus : ISerialBus, IDisposable
+public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
 
     private sealed record SubscriptionEntry(Type Type, Delegate Handler);
     private readonly ConcurrentDictionary<string, List<SubscriptionEntry>> _subscriptions = new(StringComparer.Ordinal);
@@ -24,9 +24,6 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
     private UdpClient? _udpClient;
     private CancellationTokenSource? _cts;
     private ProtocolConfiguration? _config;
-
-    public UdpSerialBus(IEnumerable<IMessageSerializer> serializers)
-        => _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
 
     /// <summary>
     /// True if a UDP client is active and listening.
@@ -51,7 +48,7 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
         {
             try
             {
-                var result = await _udpClient.ReceiveAsync(token).ConfigureAwait(false);
+                var result = await _udpClient.ReceiveAsync(token);
                 ProcessIncoming(result.Buffer);
             }
             catch (OperationCanceledException)
@@ -162,7 +159,7 @@ public sealed partial class UdpSerialBus : ISerialBus, IDisposable
             if (!sentTo.Add(key)) return; // already scheduled
             try
             {
-                await _udpClient.SendAsync(buffer, buffer.Length, ep).ConfigureAwait(false);
+                await _udpClient.SendAsync(buffer, buffer.Length, ep);
             }
             catch
             {

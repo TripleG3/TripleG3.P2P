@@ -23,6 +23,8 @@
 		<EmbedUntrackedSources>true</EmbedUntrackedSources>
 		<AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<ApplicationIcon>favicon.ico</ApplicationIcon>
+		<PackageIcon>icon.png</PackageIcon>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -31,7 +33,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <None Include="..\..\README.md" Pack="true" PackagePath="/" Link="README.md" />
+		<None Include="..\..\README.md" Pack="true" PackagePath="/" Link="README.md" />
+		<None Include="..\..\LICENSE" Pack="true" PackagePath="/" />
+		<None Include="icon.png" Pack="true" Visible="false" PackagePath="" />
 	</ItemGroup>
 
 </Project>

@@ -15,9 +15,9 @@ namespace TripleG3.P2P.Tcp;
 /// and outgoing connections to the configured <see cref="ProtocolConfiguration.RemoteEndPoint"/> plus any <see cref="ProtocolConfiguration.BroadcastEndPoints"/>.
 /// Connections are established lazily on first send; inbound accepted sockets are added to the connection set for fan-out.
 /// </summary>
-public sealed class TcpSerialBus : ISerialBus, IDisposable
+public sealed class TcpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
     private ProtocolConfiguration? _config;
     private CancellationTokenSource? _cts;
     private TcpListener? _listener;
@@ -28,9 +28,6 @@ public sealed class TcpSerialBus : ISerialBus, IDisposable
     // Active outbound / inbound connections
     private readonly ConcurrentDictionary<string, TcpClient> _clients = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _connectLock = new(1,1);
-
-    public TcpSerialBus(IEnumerable<IMessageSerializer> serializers)
-        => _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
 
     public bool IsListening => _listener != null;
 
@@ -53,7 +50,7 @@ public sealed class TcpSerialBus : ISerialBus, IDisposable
             TcpClient? client = null;
             try
             {
-                client = await _listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                client = await _listener.AcceptTcpClientAsync(token);
                 var key = ((IPEndPoint)client.Client.RemoteEndPoint!).ToString();
                 _clients[key] = client;
                 _ = ReceiveLoopAsync(client, token);
@@ -126,7 +123,7 @@ public sealed class TcpSerialBus : ISerialBus, IDisposable
         int offset = 0;
         while (offset < buffer.Length)
         {
-            int read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), token).ConfigureAwait(false);
+            int read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), token);
             if (read == 0) return false;
             offset += read;
         }
@@ -211,8 +208,8 @@ public sealed class TcpSerialBus : ISerialBus, IDisposable
             {
                 if (!kv.Value.Connected) { _clients.TryRemove(kv.Key, out _); continue; }
                 var stream = kv.Value.GetStream();
-                await stream.WriteAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+                await stream.FlushAsync(cancellationToken);
             }
             catch { }
         }

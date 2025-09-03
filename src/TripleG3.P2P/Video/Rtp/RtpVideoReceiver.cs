@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using TripleG3.P2P.Video.Security;
 using Microsoft.Extensions.Logging;
 using TripleG3.P2P.Video.Stats;
 
@@ -11,14 +10,12 @@ public interface IRtpVideoReceiver : IStatsCollector
     void ProcessRtp(ReadOnlySpan<byte> datagram);
 }
 
-public sealed class RtpVideoReceiver : IRtpVideoReceiver
+public sealed class RtpVideoReceiver(Video.Security.IVideoPayloadCipher cipher, ILogger<RtpVideoReceiver>? log = null) : IRtpVideoReceiver
 {
-    private readonly H264RtpDepacketizer _depacketizer;
+    private readonly H264RtpDepacketizer _depacketizer = new H264RtpDepacketizer(cipher);
     private readonly RtpReorderBuffer _reorder = new(64);
     private readonly VideoStreamStats _stats = new();
     public event Action<EncodedAccessUnit>? AccessUnitReceived;
-
-    private readonly ILogger<RtpVideoReceiver>? _log;
 
     private ushort? _lastSeq;
     private ushort? _baseSeq; // first sequence observed
@@ -29,13 +26,11 @@ public sealed class RtpVideoReceiver : IRtpVideoReceiver
     private byte _lastFractionLost;
     private uint _lastTransit; // for jitter calc
     private uint _clockRate = 90000; // H264 assumed
-    public RtpVideoReceiver(Video.Security.IVideoPayloadCipher cipher, ILogger<RtpVideoReceiver>? log = null)
-    { _log = log; _depacketizer = new H264RtpDepacketizer(cipher); }
 
     public void ProcessRtp(ReadOnlySpan<byte> datagram)
     {
     _stats.PacketsReceived++; _stats.BytesReceived += (uint)datagram.Length;
-    try { _log?.LogDebug("LegacyRtpVideoReceiver.ProcessRtp len={Len} packetsReceived={Packets}", datagram.Length, _stats.PacketsReceived); } catch { }
+    try { log?.LogDebug("LegacyRtpVideoReceiver.ProcessRtp len={Len} packetsReceived={Packets}", datagram.Length, _stats.PacketsReceived); } catch { }
         if (!RtpPacket.TryParse(datagram, out var pkt)) return;
         HandleSeqAndJitter(pkt);
         // Store for reordering before depacketization
@@ -44,7 +39,7 @@ public sealed class RtpVideoReceiver : IRtpVideoReceiver
         {
                 if (_depacketizer.TryProcessPacket(raw, out var au))
                 {
-                    try { _log?.LogDebug("LegacyRtpVideoReceiver invoking AccessUnitReceived ts={Ts} isKey={IsKey}", au.Timestamp90k, au.IsKeyFrame); } catch { }
+                    try { log?.LogDebug("LegacyRtpVideoReceiver invoking AccessUnitReceived ts={Ts} isKey={IsKey}", au.Timestamp90k, au.IsKeyFrame); } catch { }
                     AccessUnitReceived?.Invoke(au);
                 }
         }
