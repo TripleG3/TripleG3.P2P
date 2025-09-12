@@ -96,8 +96,8 @@ public class TcpIntegrationTests
 
         await WaitForAsync(() => { lock(s1Msgs) lock(s2Msgs) return s1Msgs.Contains(chat) && s2Msgs.Contains(chat); });
 
-        lock(s1Msgs) Assert.Single(s1Msgs.Where(c => c == chat));
-        lock(s2Msgs) Assert.Single(s2Msgs.Where(c => c == chat));
+        lock(s1Msgs) Assert.Single(s1Msgs, c => c == chat);
+        lock(s2Msgs) Assert.Single(s2Msgs, c => c == chat);
 
         await hub.CloseConnectionAsync();
         await s1.CloseConnectionAsync();
