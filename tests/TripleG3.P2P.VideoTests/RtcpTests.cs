@@ -14,7 +14,7 @@ public class RtcpTests
     byte[]? srBytes = null; byte[]? rrBytes = null;
     var sender = new TripleG3.P2P.Video.RtpVideoSender(0x10,1200,cipher, _=>{}, b=> srBytes = b.ToArray());
     var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
-    using var au = BuildAu(new byte[]{0x65,1,2,3}, 5000);
+    using var au = BuildAu([0x65,1,2,3], 5000);
     sender.Send(au);
     // feed one packet for timestamp context
     receiver.ProcessRtp(new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x10,1200,new TripleG3.P2P.Video.Security.NoOpCipher()).Packetize(au).First().Span);
@@ -40,8 +40,8 @@ public class RtcpTests
     var receiver = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
     var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x30,1200,new TripleG3.P2P.Video.Security.NoOpCipher());
         // Build two access units; drop one packet from second to simulate loss
-    using var au1 = BuildAu(new byte[]{0x61,1,2,3}, 1000);
-    using var au2 = BuildAu(new byte[]{0x61,4,5,6}, 2000);
+    using var au1 = BuildAu([0x61,1,2,3], 1000);
+    using var au2 = BuildAu([0x61,4,5,6], 2000);
         var p1 = pktizer.Packetize(au1).ToList();
         var p2 = pktizer.Packetize(au2).ToList();
         // drop first packet of au2 if multiple

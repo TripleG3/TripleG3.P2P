@@ -31,8 +31,8 @@ public class H264RtpDepacketizerTests
     public void ReorderBuffer_OutOfOrder_DeliversInOrder()
     {
         // simple single NAL small packets across two frames
-        byte[] nal1 = {0x65,1,2,3};
-        byte[] nal2 = {0x61,4,5,6};
+        byte[] nal1 = [0x65,1,2,3];
+        byte[] nal2 = [0x61,4,5,6];
     using var au1 = BuildAu(nal1,1000);
     using var au2 = BuildAu(nal2,2000);
     var pktizer = new H264RtpPacketizer(0x2,1200,new TripleG3.P2P.Video.Security.NoOpCipher());

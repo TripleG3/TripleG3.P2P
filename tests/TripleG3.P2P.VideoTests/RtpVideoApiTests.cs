@@ -56,7 +56,7 @@ namespace TripleG3.P2P.VideoTests
         public void Timestamp_Mapping_OneSecond_Equals_90000()
         {
             var ticks = TimeSpan.TicksPerSecond;
-            var au = EncodedAccessUnitFactory.FromAnnexB(new ReadOnlyMemory<byte>(new byte[]{0,0,0,1,0x65}), ticks, true, 0,0, CodecKind.H264);
+            var au = EncodedAccessUnitFactory.FromAnnexB(new ReadOnlyMemory<byte>([0,0,0,1,0x65]), ticks, true, 0,0, CodecKind.H264);
             // internal mapping in Packetizer is private; replicate formula
             uint ts = au.RtpTimestamp90k;
             Assert.Equal(90000u, ts);

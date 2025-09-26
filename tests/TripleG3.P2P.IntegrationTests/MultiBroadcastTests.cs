@@ -46,7 +46,7 @@ public class MultiBroadcastTests
         {
             LocalPort = portA,
             RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, portB), // primary
-            BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, portC) },
+            BroadcastEndPoints = [new IPEndPoint(IPAddress.Loopback, portC)],
             SerializationProtocol = proto
         });
 
@@ -96,7 +96,7 @@ public class MultiBroadcastTests
         {
             LocalPort = portHub,
             RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, portS1),
-            BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, portS2) },
+            BroadcastEndPoints = [new IPEndPoint(IPAddress.Loopback, portS2)],
             SerializationProtocol = proto
         });
         await s1.StartListeningAsync(new ProtocolConfiguration
@@ -195,7 +195,7 @@ public class MultiBroadcastTests
         {
             LocalPort = portSender,
             RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, portR1),
-            BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, portR2), new IPEndPoint(IPAddress.Loopback, portR2) },
+            BroadcastEndPoints = [new IPEndPoint(IPAddress.Loopback, portR2), new IPEndPoint(IPAddress.Loopback, portR2)],
             SerializationProtocol = proto
         });
 
@@ -339,7 +339,7 @@ public class MultiBroadcastTests
         {
             LocalPort = senderPort,
             RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, recv1Port),
-            BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, recv2Port) },
+            BroadcastEndPoints = [new IPEndPoint(IPAddress.Loopback, recv2Port)],
             SerializationProtocol = proto
         });
 

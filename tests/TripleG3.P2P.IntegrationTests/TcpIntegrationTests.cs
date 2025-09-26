@@ -87,7 +87,7 @@ public class TcpIntegrationTests
         await hub.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = hubPort,
             RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, s1Port),
-            BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, s2Port) },
+            BroadcastEndPoints = [new IPEndPoint(IPAddress.Loopback, s2Port)],
             SerializationProtocol = proto
         });
 

@@ -15,7 +15,7 @@ public class JitterAndLossTests
     public void LossTracking_Increments_When_SequenceGap()
     {
     var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x55, 1200, new TripleG3.P2P.Video.Security.NoOpCipher());
-        using var au = BuildAu(new byte[] { 0x61, 1, 2, 3 }, 1000);
+        using var au = BuildAu([0x61, 1, 2, 3], 1000);
         var packets = pktizer.Packetize(au).ToList();
         // Drop middle (if multiple) else simulate by removing none if single
         if (packets.Count > 2) packets.RemoveAt(1);
@@ -37,8 +37,8 @@ public class JitterAndLossTests
     var recv = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
         // Manually craft two RTP packets with different network delay simulation
     var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x44, 1200, new TripleG3.P2P.Video.Security.NoOpCipher());
-        using var au1 = BuildAu(new byte[] { 0x61, 1 }, 0);
-        using var au2 = BuildAu(new byte[] { 0x61, 2 }, 3000); // 33ms at 90kHz roughly
+        using var au1 = BuildAu([0x61, 1], 0);
+        using var au2 = BuildAu([0x61, 2], 3000); // 33ms at 90kHz roughly
         var p1 = pktizer.Packetize(au1).First();
         var p2 = pktizer.Packetize(au2).First();
         recv.ProcessRtp(p1.Span);

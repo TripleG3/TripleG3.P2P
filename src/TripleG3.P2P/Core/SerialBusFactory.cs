@@ -13,21 +13,21 @@ public static class SerialBusFactory
     /// Creates a UDP serial bus configured with the built-in serializers (None / JsonRaw).
     /// </summary>
     public static ISerialBus CreateUdp()
-        => new UdpSerialBus(new IMessageSerializer[]
-        {
+        => new UdpSerialBus(
+        [
             new NoneMessageSerializer(),
             new JsonRawMessageSerializer()
-        });
+        ]);
 
     /// <summary>
     /// Creates a TCP serial bus (reliable stream) using the same serializers.
     /// </summary>
     public static ISerialBus CreateTcp()
-        => new TcpSerialBus(new IMessageSerializer[]
-        {
+        => new TcpSerialBus(
+        [
             new NoneMessageSerializer(),
             new JsonRawMessageSerializer()
-        });
+        ]);
 
     /// <summary>
     /// Placeholder for future FTP-based transport (likely will be a control channel + file payload hybrid).
