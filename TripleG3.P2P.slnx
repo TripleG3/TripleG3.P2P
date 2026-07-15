@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TripleG3.P2P/TripleG3.P2P.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.csproj" />
+    <Project Path="tests/TripleG3.P2P.VideoTests/TripleG3.P2P.VideoTests.csproj" />
+  </Folder>
+</Solution>
