@@ -19,12 +19,15 @@ public class H264RtpDepacketizerTests
         // Drop middle packet
         packets.RemoveAt(1);
     var dep = new TripleG3.P2P.Video.Rtp.H264RtpDepacketizer(new TripleG3.P2P.Video.Security.NoOpCipher());
+        var delivered = false;
         foreach (var p in packets)
         {
-            dep.TryProcessPacket(p.Span, out var _);
+            if (!dep.TryProcessPacket(p.Span, out var completed)) continue;
+            delivered = true;
+            completed.Dispose();
         }
-        // No complete frame delivered
-    Assert.DoesNotContain(packets, p => dep.TryProcessPacket(p.Span, out var _));
+
+        Assert.False(delivered);
     }
 
     [Fact]
@@ -40,9 +43,9 @@ public class H264RtpDepacketizerTests
         var p2 = pktizer.Packetize(au2).ToList();
     var dep = new H264RtpDepacketizer(new TripleG3.P2P.Video.Security.NoOpCipher());
         // With new receiver reorder integrated we test via receiver
-    var recv = new TripleG3.P2P.Video.Rtp.RtpVideoReceiver(new TripleG3.P2P.Video.Security.NoOpCipher());
+    using var recv = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.NoOpCipher());
         var delivered = new List<uint>();
-        recv.AccessUnitReceived += au => delivered.Add(au.Timestamp90k);
+        recv.AccessUnitReceived += au => delivered.Add(au.RtpTimestamp90k);
         // send out of order
         foreach (var m in p2) recv.ProcessRtp(m.Span);
         foreach (var m in p1) recv.ProcessRtp(m.Span);

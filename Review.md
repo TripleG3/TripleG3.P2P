@@ -2,22 +2,42 @@
 
 Review date: 2026-07-15  
 Scope: `src/TripleG3.P2P`, both test projects, package metadata, documentation, and the release workflow.  
-Method: read-only source review plus local build/test execution. No production or test source was changed.
+Method: original read-only review followed by implementation, focused regression tests, solution-wide validation, and package inspection.
 
-## Executive Summary
+## Implementation Status
 
-The core abstractions are compact, the repository builds cleanly, and all 36 existing tests pass. The strongest parts are the small `ISerialBus` API, explicit UDP/RTP headers, serializer abstraction, UDP fan-out tests, and the attempt to make video buffer ownership explicit.
+Implemented on 2026-07-15. The user had already upgraded all three projects to `net10.0` and added the root SLNX before remediation began; those changes were preserved.
 
-The current green test suite does not cover several important paths. The highest-priority concerns are:
+| Review item | Resolution |
+| --- | --- |
+| P0-1 | Aligned README and NuGet metadata with the tracked `GPL-3.0-only` license and validated the generated package manifest. |
+| P0-2 | Made the stable sender implement `IRtpVideoSender`; DI now requires explicit sender/receiver configuration and is covered by a real UDP transfer test. |
+| P0-3 | Replaced the corrupt internal depacketizer path with exact-length pooled assembly and byte-for-byte single-NAL/FU-A tests. |
+| P1-1 | Defined input/output cipher overloads, protected the complete RTP payload consistently, reserved overhead inside MTU, and added authenticated-overhead/tamper tests. |
+| P1-2 | Removed constructor-started receive work; `StartAsync`/`StopAsync` now own one tracked, restartable receive loop. |
+| P1-3 | Added circular sequence tracking, bounded marker/window recovery, partial-frame reset on gaps, and loss-followed-by-recovery tests. |
+| P1-4 | Separated accepted receive sessions from configured TCP send targets; unconfigured accepted clients never receive fan-out. |
+| P1-5 | Added exact connection removal, reconnect behavior, per-connection send serialization, tracked receive tasks, and concurrency/restart tests. |
+| P1-6 | Cancellation propagates; all-destination failure throws; partial failure and subscriber errors are logged. |
+| P1-7 | Added versioned `LengthPrefixed = 2` serialization with recursive framing and explicit null markers while preserving `None = 0`. |
+| P1-8 | Added one shared `[Udp]` contract model, constructor mapping by name/type, invariant values, and explicit `DateTimeOffset` support. |
+| P1-9 | Bounded RTP frame count, frame/NAL bytes, and assembly age; every completion/eviction/drop releases pooled buffers. |
+| P1-10 | Release CI uses .NET 10, builds/tests the SLNX before pack/push, validates package contents, and uploads results; PR CI was added. |
+| P2-1 | Receiver enforces payload type/SSRC/jitter bounds and parses RTP CSRC, extension, and padding data. |
+| P2-2 | Subscription dispatch uses immutable snapshots and optional disposable registrations through `ISubscriptionSerialBus`. |
+| P2-3 | Stable high-level video APIs are canonical; duplicate high-level RTP and async encoder/decoder APIs are obsolete for 2.0 removal. |
+| P2-4 | UDP/TCP validate exact lengths, enum/protocol values, configurable payload limits, and explicit little-endian headers. |
+| P3 | Added central package management, repository NuGet source mapping/audit policy, `.ai/instructions.md`, nullable warning parity, current docs, and the root solution build path. |
 
-1. The repository says MIT while the included license is GPL-3.0, and the NuGet package has no explicit license metadata.
-2. The configuration/DI video path is not usable as registered and its internal depacketizer emits buffers other than the buffers it filled.
-3. The advertised cipher paths either ignore the cipher or protect different byte ranges for fragmented H.264 packets.
-4. TCP connection tracking can duplicate messages, disclose outbound messages to any accepted client, and prevent reconnection after a disconnect.
-5. The `None` serializer is not round-trip safe for delimiters, empty strings, arbitrary nesting, reordered attributes, culture-sensitive values, or `DateTimeOffset`.
-6. The release workflow publishes without running either test project.
+Compatibility notes:
 
-The video feature is described as both experimental and a stable 1.x surface. Until the P0/P1 video findings are addressed, it should remain explicitly experimental and should not be treated as production-ready.
+- `SerializationProtocol.None` remains unchanged for existing peers and therefore retains delimiter/null/nesting limitations. New attribute contracts should use `LengthPrefixed`.
+- The obsolete `TripleG3.P2P.Video.Rtp` high-level wrappers remain source-compatible until their planned 2.0 removal.
+- RTP video remains explicitly experimental despite the correctness and lifecycle hardening completed here.
+
+## Original Review Findings
+
+The findings below are retained as the rationale and audit trail for the completed changes. Their recommendations have been implemented as summarized above.
 
 ## Severity Guide
 
@@ -346,10 +366,10 @@ Two current assertions deserve replacement:
 
 ### Package and build reproducibility
 
-- No repository-owned `NuGet.Config` is tracked, so restore sources and package source mapping come from user/machine configuration. Add a repository configuration with `<clear />` and explicit source mappings for the package families used here so restore behavior is portable to CI and other machines.
-- Consider `Directory.Packages.props`; package versions are repeated across the library and test projects.
-- .NET 9 is in maintenance support while .NET 10 is the active-support line. Plan an upgrade or a deliberate multi-targeting policy based on the minimum runtime required by consumers.
-- Add a solution file or a root build entry point so one command restores, builds, tests, and packs the complete repository.
+- Repository-owned `NuGet.Config` now clears inherited sources, maps the current dependency families to NuGet.org, and enables all-package auditing.
+- `Directory.Packages.props` centrally manages package versions.
+- Every project targets `net10.0`.
+- `TripleG3.P2P.slnx` is the root restore/build/test entry point.
 
 ### Observability and API clarity
 
@@ -372,11 +392,12 @@ Two current assertions deserve replacement:
 
 | Check | Result |
 | --- | --- |
-| `dotnet build src/TripleG3.P2P/TripleG3.P2P.csproj -c Release -warnaserror` | Passed with no warnings or errors. |
-| Integration test project, Release | 20 passed, 0 failed. |
-| Video test project, Release with warnings as errors | 16 passed, 0 failed. |
+| `dotnet build TripleG3.P2P.slnx -c Release -warnaserror` | Passed on .NET 10 with no warnings or errors. |
+| Integration test project, Release | 37 passed, 0 failed. |
+| Video test project, Release with warnings as errors | 27 passed, 0 failed. |
+| Package generation and manifest inspection | Passed; package targets `net10.0`, declares `GPL-3.0-only`, and contains README, LICENSE, DLL, symbols. |
 | `Convert.ChangeType` probe for `DateTimeOffset` | Failed with invalid cast, confirming the advertised type cannot use the generic conversion path. |
 | `TcpClient` endpoint-after-close probe | Endpoint was unavailable after close, confirming the current dictionary cleanup order cannot recover its key. |
-| NuGet supply-chain review | NuGet Audit is enabled; source mapping is inherited rather than repository-owned; Central Package Management is not enabled. |
+| NuGet supply-chain review follow-up | Audit, package source mapping, and Central Package Management are now repository-owned. |
 
-The machine did not have the .NET 9 runtime installed. Tests were built for `net9.0` and executed successfully on the installed .NET 10 runtime with `DOTNET_ROLL_FORWARD=Major`. CI should still run them on the exact supported target runtime.
+All projects and validation commands use the installed .NET 10 SDK/runtime directly; no runtime roll-forward is required.

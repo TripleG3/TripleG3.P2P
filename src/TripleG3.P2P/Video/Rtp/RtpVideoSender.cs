@@ -7,6 +7,7 @@ public interface IRtpVideoSender : IStatsCollector
     void Send(EncodedAccessUnit au);
 }
 
+[Obsolete("Use TripleG3.P2P.Video.RtpVideoSender. This compatibility type will be removed in 2.0.", false)]
 public sealed class RtpVideoSender : IRtpVideoSender
 {
     private readonly H264RtpPacketizer _packetizer;

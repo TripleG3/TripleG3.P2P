@@ -1,124 +1,155 @@
 # TripleG3.P2P.Video
 
-Minimal, DI-friendly RTP video API consumed by `TripleG3.Camera.Maui` (no reflection required). Provides a tiny, stable surface while retaining the richer legacy implementation internally for compatibility.
+Experimental, DI-friendly H.264 over RTP for .NET 10. The canonical public API is in `TripleG3.P2P.Video`; low-level packet types remain under `TripleG3.P2P.Video.Rtp`.
 
-## Stable Public Surface (Semantic-Stable)
-
-Namespace: `TripleG3.P2P.Video`
+## Stable Entry Points
 
 ```csharp
-public readonly struct EncodedAccessUnit : IDisposable {
-	ReadOnlyMemory<byte> AnnexB { get; }
-	bool IsKeyFrame { get; }
-	uint RtpTimestamp90k { get; }   // 90 kHz RTP clock
-	long CaptureTicks { get; }      // original capture ticks (DateTime.UtcNow.Ticks or Stopwatch ticks)
+public readonly struct EncodedAccessUnit : IDisposable
+{
+    ReadOnlyMemory<byte> AnnexB { get; }
+    bool IsKeyFrame { get; }
+    uint RtpTimestamp90k { get; }
+    long CaptureTicks { get; }
 }
 
-public interface IVideoPayloadCipher {
-	int OverheadBytes { get; }
-	void Encrypt(Span<byte> payload);   // in-place
-	void Decrypt(Span<byte> payload);   // in-place
+public interface IVideoPayloadCipher
+{
+    int OverheadBytes { get; }
+    int Encrypt(Span<byte> buffer);
+    int Decrypt(Span<byte> buffer);
+    int Encrypt(ReadOnlySpan<byte> payload, Span<byte> output);
+    int Decrypt(ReadOnlySpan<byte> payload, Span<byte> output);
 }
 
-public sealed class NoOpCipher : IVideoPayloadCipher { ... }
+public sealed class RtpVideoSender : IDisposable
+{
+    RtpVideoSender(
+        uint ssrc,
+        int mtu,
+        IVideoPayloadCipher cipher,
+        Action<ReadOnlyMemory<byte>> rtpOut,
+        Action<ReadOnlyMemory<byte>>? rtcpOut = null);
 
-public sealed class RtpVideoSender : IDisposable {
-	RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> rtpOut, Action<ReadOnlyMemory<byte>>? rtcpOut = null);
-	void Send(EncodedAccessUnit au);              // sync helper (fire & forget)
-	Task<bool> SendAsync(EncodedAccessUnit au);   // async path
-	void SendSenderReport(uint rtpTimestamp);     // optional (delegates to legacy)
-	RtpVideoSenderStats GetStats();
+    void Send(EncodedAccessUnit accessUnit);
+    Task<bool> SendAsync(EncodedAccessUnit accessUnit, CancellationToken cancellationToken = default);
+    void SendSenderReport(uint rtpTimestamp);
+    void ProcessRtcp(ReadOnlySpan<byte> packet);
+    RtpVideoSenderStats GetStats();
 }
 
-public sealed class RtpVideoReceiver : IDisposable {
-	RtpVideoReceiver(IVideoPayloadCipher cipher);
-	event Action<EncodedAccessUnit>? AccessUnitReceived;
-	void ProcessRtp(ReadOnlySpan<byte> packet);   // feed inbound RTP datagram
-	void ProcessRtcp(ReadOnlySpan<byte> packet);  // optional (delegates to legacy)
-	byte[]? CreateReceiverReport(uint reporterSsrc);
-	RtpVideoReceiverStats GetStats();
-	void RequestKeyframe();                       // raises KeyframeNeeded internally
+public sealed class RtpVideoReceiver : IDisposable, IAsyncDisposable
+{
+    RtpVideoReceiver(IVideoPayloadCipher cipher);
+    event Action<EncodedAccessUnit>? AccessUnitReceived;
+    void ProcessRtp(ReadOnlySpan<byte> packet);
+    void ProcessRtcp(ReadOnlySpan<byte> packet);
+    byte[]? CreateReceiverReport(uint reporterSsrc);
+    RtpVideoReceiverStats GetStats();
 }
-
-public sealed class RtpVideoSenderStats { uint PacketsSent; uint BytesSent; uint AUsSent; }
-public sealed class RtpVideoReceiverStats { uint PacketsReceived; uint BytesReceived; uint PacketsLost; }
-
-public static class Rtcp { static bool IsRtcpPacket(ReadOnlySpan<byte> datagram); }
 ```
 
-Everything else (packetizer internals, jitter, RTT, extended RTCP metrics, test ciphers under `Video.Security`) is **not** part of the stable contract and may change without a version bump beyond patch.
+## Callback Transport
 
-## Usage (Basic)
+Use callback construction when the application owns UDP or another datagram transport:
 
-Sender (e.g. encoder thread):
 ```csharp
 var cipher = new TripleG3.P2P.Video.NoOpCipher();
-var sender = new RtpVideoSender(ssrc: 0x1234u, mtu: 1200, cipher,
-	rtpOut: packet => udpSocket.Send(packet.Span),
-	rtcpOut: rtcp => udpSocket.Send(rtcp.Span));
+using var sender = new RtpVideoSender(
+    ssrc: 0x1234u,
+    mtu: 1200,
+    cipher,
+    rtpOut: packet => udpSocket.Send(packet.Span));
 
-// Build Annex B access unit (start codes + NALs)
-using var au = new EncodedAccessUnit(annexBBytes, isKeyFrame, rtpTs90k, captureTicks);
-sender.Send(au); // or await sender.SendAsync(au);
-```
-
-Receiver:
-```csharp
-var recv = new RtpVideoReceiver(new TripleG3.P2P.Video.NoOpCipher());
-recv.AccessUnitReceived += au =>
+using var receiver = new RtpVideoReceiver(cipher);
+receiver.AccessUnitReceived += accessUnit =>
 {
-	if (au.IsKeyFrame) Console.WriteLine("Key frame");
-	// au.AnnexB contains full frame (copy or decode then dispose)
-	au.Dispose(); // return pooled buffer
+    try
+    {
+        Decode(accessUnit.AnnexB.Span, accessUnit.IsKeyFrame);
+    }
+    finally
+    {
+        accessUnit.Dispose();
+    }
 };
 
-// For each UDP datagram containing RTP:
-recv.ProcessRtp(rtpPayload);
+using var frame = EncodedAccessUnit.FromAnnexB(annexB, captureTicks, isKeyFrame);
+sender.Send(frame);
 ```
 
-Compute RTP timestamp (90 kHz) from capture ticks (DateTime.UtcNow.Ticks):
+`Send` is available for callback-backed senders. Network-backed senders use `SendAsync` so cancellation and socket failure remain observable.
+
+## Configured UDP and DI
+
+DI requires explicit sender and receiver configuration. Resolving services with port-zero defaults is intentionally not supported.
+
 ```csharp
-uint rtpTs = (uint)((captureTicks * 90000) / TimeSpan.TicksPerSecond);
+services.AddTripleG3P2PVideo(options =>
+{
+    options.SenderConfiguration = new RtpVideoSenderConfig
+    {
+        RemoteIp = "127.0.0.1",
+        RemotePort = 7001,
+        Ssrc = 0x1234,
+        PayloadType = 96,
+        Mtu = 1200
+    };
+    options.ReceiverConfiguration = new RtpVideoReceiverConfig
+    {
+        LocalAddress = IPAddress.Loopback,
+        LocalPort = 7001,
+        ExpectedSsrc = 0x1234,
+        PayloadType = 96,
+        JitterBufferMax = TimeSpan.FromMilliseconds(250)
+    };
+});
+
+var sender = provider.GetRequiredService<IRtpVideoSender>();
+var receiver = provider.GetRequiredService<IRtpVideoReceiver>();
+await receiver.StartAsync(cancellationToken);
+await sender.SendAsync(frame, cancellationToken);
+await receiver.StopAsync();
 ```
 
-Or build via helper:
-```csharp
-var au = EncodedAccessUnit.FromAnnexB(annexB, captureTicks, isKeyFrame);
-```
+The receiver constructor performs no asynchronous work. `StartAsync` is idempotent, `StopAsync` cancels and awaits the one receive loop, and the receiver may be restarted before disposal.
 
-## Legacy / Compatibility Layer
+## Cipher Contract
 
-The original, more feature-rich implementation (reordering, extended RTCP/jitter, experimental ciphers) remains under `TripleG3.P2P.Video.Rtp` & `TripleG3.P2P.Video.Security`. The stable classes internally delegate to those when constructed with the stable cipher interface via an internal adapter. Do **not** rely on types from `.Video.Rtp` for new consumers.
+The complete RTP payload is protected consistently for both single-NAL and FU-A packets. `OverheadBytes` is reserved inside the configured MTU. Ciphers that append authentication data must implement the separate input/output overloads; the default overload rejects nonzero overhead rather than silently truncating it.
 
-Two `NoOpCipher` classes exist:
-- `TripleG3.P2P.Video.NoOpCipher` (stable interface)
-- `TripleG3.P2P.Video.Security.NoOpCipher` (legacy interface)
-Use the first for new code. The second is kept only for existing tests / legacy pathways.
+`NoOpCipher` is a transport placeholder, not security. Production media security should use an authenticated design with managed key establishment, such as SRTP integrated by the application.
 
-## Memory & Disposal
+## Receiver Behavior
 
-`EncodedAccessUnit` may wrap a pooled buffer. Always dispose it after use (pattern: `using var au = ...`). If you need to retain frame bytes, copy them before disposal.
+- Payload type is validated on every packet.
+- `ExpectedSsrc` is enforced when configured; otherwise the first accepted SSRC is latched.
+- RTP CSRC entries, header extensions, and padding are parsed before H.264 payload processing.
+- Sequence numbers use circular 16-bit ordering and recover at bounded frame/window boundaries.
+- A sequence gap invalidates the current H.264 frame but does not block later frames.
+- In-flight frame count, frame bytes, NAL bytes, and assembly age are bounded.
+- Every dropped or completed pooled assembly returns its buffers.
 
-## Stats Philosophy
+## Memory Ownership
 
-Stats are intentionally minimal (packet/byte/frame counters + loss). Higher-level quality metrics (jitter, RTT) were removed from the stable surface to keep API lean; those may still be computed internally and could reappear via an opt-in extension in a future minor version.
+Received `EncodedAccessUnit` instances may own pooled memory. Dispose each access unit after decoding. Copy `AnnexB` before disposal if it must outlive the callback.
 
-## Versioning Policy
+Outbound RTP callbacks receive exact-length managed arrays and may retain them safely.
 
-The list in Stable Public Surface above defines the contract for 1.x. Additions will trigger a minor (1.y.0) bump; removals / breaking changes will require 2.0.
+## Compatibility Layer
 
-## Testing Ciphers
+The old high-level `TripleG3.P2P.Video.Rtp.RtpVideoSender` and `RtpVideoReceiver` types are obsolete compatibility wrappers and are scheduled for removal in 2.0. New consumers should use `TripleG3.P2P.Video.RtpVideoSender`, `RtpVideoReceiver`, and the interfaces in `TripleG3.P2P.Video.Abstractions`.
 
-`Video.Security.XorTestCipher` is strictly for tests. It is **not** secure. For real encryption integrate a proper SRTP or end-to-end media security layer externally.
+Low-level `RtpPacket`, `H264RtpPacketizer`, `H264RtpDepacketizer`, and RTCP helpers remain implementation-oriented and may evolve with the experimental subsystem.
 
-## Logging / DI
+## Test Coverage
 
-Logging uses `Microsoft.Extensions.Logging`. You can register the library via provided service collection extensions (see root project) or manually instantiate senders/receivers as shown.
+The video tests cover:
 
-## Contributing Guidelines
-
-1. Do not expand the stable surface without discussion.
-2. Prefer internal helpers + adapters over exposing legacy types.
-3. Keep allocations minimal; return pooled buffers promptly.
-4. Add/update tests for any behavioral changes touching stable types.
-
+- exact single-NAL and FU-A byte reconstruction;
+- authenticated cipher overhead and tamper rejection;
+- loss recovery and sequence-number wrap/concurrency;
+- SSRC and payload-type filtering;
+- bounded oversized-frame rejection;
+- receiver start, stop, and restart;
+- complete DI resolution and UDP frame transfer.

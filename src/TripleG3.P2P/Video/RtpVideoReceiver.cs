@@ -1,144 +1,211 @@
+using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using TripleG3.P2P.Security;
 using TripleG3.P2P.Video.Abstractions;
-using TripleG3.P2P.Video.Internal;
 using TripleG3.P2P.Video.Primitives;
+using PacketReceiver = TripleG3.P2P.Video.Rtp.RtpVideoReceiverEngine;
 
-namespace TripleG3.P2P.Video
+namespace TripleG3.P2P.Video;
+
+/// <summary>Canonical high-level RTP video receiver with explicit asynchronous lifecycle.</summary>
+public sealed class RtpVideoReceiver : IRtpVideoReceiver, IAsyncDisposable
 {
-    /// <summary>
-    /// High-level RTP video receiver that listens on UDP, depacketizes RTP and raises frames.
-    /// </summary>
-    public sealed class RtpVideoReceiver : IRtpVideoReceiver
-    {
-        private readonly RtpVideoReceiverConfig _config;
-    private readonly UdpClient _udp;
+    private readonly RtpVideoReceiverConfig _config;
+    private readonly PacketReceiver _engine;
+    private readonly ILogger<RtpVideoReceiver> _logger;
+    private readonly object _lifecycleGate = new();
+    private UdpClient? _udpClient;
     private CancellationTokenSource? _cts;
-    private readonly Depacketizer _depacketizer = new Depacketizer();
-    private ILogger<RtpVideoReceiver>? _log;
-    private Task? _recvTask;
-    // legacy impl for compatibility with tests using Video.Rtp types
-    private TripleG3.P2P.Video.Rtp.RtpVideoReceiver? _legacyImpl;
+    private Task? _receiveTask;
+    private int _disposed;
+
+    public RtpVideoReceiver(RtpVideoReceiverConfig config, ILogger<RtpVideoReceiver>? logger = null)
+        : this(config, new TripleG3.P2P.Security.NoOpCipher(), logger)
+    {
+    }
+
+    public RtpVideoReceiver(
+        RtpVideoReceiverConfig config,
+        ICipher cipher,
+        ILogger<RtpVideoReceiver>? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(cipher);
+        ValidateConfiguration(config, false);
+        _config = config;
+        _logger = logger ?? NullLogger<RtpVideoReceiver>.Instance;
+        _engine = new PacketReceiver(
+            new CoreCipherAdapter(cipher),
+            checked((byte)config.PayloadType),
+            config.ExpectedSsrc,
+            config.JitterBufferMax);
+        _engine.AccessUnitReceived += OnAccessUnitReceived;
+    }
+
+    public RtpVideoReceiver(IVideoPayloadCipher cipher)
+    {
+        ArgumentNullException.ThrowIfNull(cipher);
+        _config = new RtpVideoReceiverConfig();
+        _logger = NullLogger<RtpVideoReceiver>.Instance;
+        _engine = new PacketReceiver(new CipherAdapter(cipher));
+        _engine.AccessUnitReceived += OnAccessUnitReceived;
+    }
 
     public event Action<EncodedAccessUnit?>? FrameReceived;
-        public event Action? KeyframeNeeded;
 
-        public RtpVideoReceiver(RtpVideoReceiverConfig config, ILogger<RtpVideoReceiver>? log = null)
+    public event Action<EncodedAccessUnit>? AccessUnitReceived;
+
+    public event Action? KeyframeNeeded;
+
+    public Task StartAsync(CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ct.ThrowIfCancellationRequested();
+        ValidateConfiguration(_config, true);
+        lock (_lifecycleGate)
         {
-            _config = config;
-            _log = log;
-            _udp = new UdpClient(config.LocalPort);
-            _cts = new CancellationTokenSource();
-            _recvTask = Task.Run(() => ReceiveLoop(_cts.Token));
-        }
-
-        /// <summary>
-        /// Stable minimal API constructor: provide only a cipher (currently unused/no-op).
-        /// </summary>
-        public RtpVideoReceiver(IVideoPayloadCipher cipher)
-            : this(new RtpVideoReceiverConfig(), null)
-        {
-            try
-            {
-                var legacyCipher = new CipherAdapter(cipher);
-                _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoReceiver((Video.Security.IVideoPayloadCipher)legacyCipher);
-                _legacyImpl.AccessUnitReceived += au => { FrameReceived?.Invoke(au); AccessUnitReceived?.Invoke(au); };
-            }
-            catch { }
-        }
-
-        /// <summary>Stable event exposing decoded access units.</summary>
-        public event Action<EncodedAccessUnit>? AccessUnitReceived;
-
-        public Task StartAsync(CancellationToken ct = default)
-        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_receiveTask is { IsCompleted: false }) return Task.CompletedTask;
+            _cts?.Dispose();
+            _udpClient?.Dispose();
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            _ = ReceiveLoop(_cts.Token);
-            return Task.CompletedTask;
+            _udpClient = new UdpClient(new IPEndPoint(_config.LocalAddress, _config.LocalPort));
+            _receiveTask = ReceiveLoopAsync(_udpClient, _cts.Token);
         }
 
-        private async Task ReceiveLoop(CancellationToken ct)
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync() => StopCoreAsync();
+
+    private async Task StopCoreAsync()
+    {
+        CancellationTokenSource? cts;
+        UdpClient? udpClient;
+        Task? receiveTask;
+        lock (_lifecycleGate)
+        {
+            cts = _cts;
+            udpClient = _udpClient;
+            receiveTask = _receiveTask;
+            _cts = null;
+            _udpClient = null;
+            _receiveTask = null;
+        }
+
+        cts?.Cancel();
+        udpClient?.Dispose();
+        if (receiveTask is not null)
         {
             try
             {
-                while (!ct.IsCancellationRequested)
-                {
-                    var res = await _udp.ReceiveAsync(ct);
-                    // if legacy impl is present, delegate to it so its cipher/reorder logic runs
-                    if (_legacyImpl != null)
-                    {
-                        _log?.LogDebug("RtpVideoReceiver.ReceiveLoop delegating to legacy impl len={Len}", res.Buffer.Length);
-                        _legacyImpl.ProcessRtp(res.Buffer);
-                        continue;
-                    }
-
-                    if (_depacketizer.AddPacket(res.Buffer, out var au))
-                    {
-                        if (au is null) continue;
-                        FrameReceived?.Invoke(au);
-                        // caller must dispose
-                    }
-                }
+                await receiveTask.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { }
-            catch (Exception) { }
-        }
-
-        public Task StopAsync()
-        {
-            _cts?.Cancel();
-            return Task.CompletedTask;
-        }
-
-        // Compatibility surface delegating to legacy impl when present
-        public void ProcessRtcp(ReadOnlySpan<byte> packet)
-        {
-            _legacyImpl?.ProcessRtcp(packet);
-        }
-
-        public byte[]? CreateReceiverReport(uint reporterSsrc)
-        {
-            return _legacyImpl?.CreateReceiverReport(reporterSsrc);
-        }
-
-        public RtpVideoReceiverStats GetStats()
-        {
-            var s = _legacyImpl?.GetStats();
-            if (s != null) return new RtpVideoReceiverStats { PacketsReceived = s.PacketsReceived, BytesReceived = s.BytesReceived, PacketsLost = s.PacketsLost };
-            return new RtpVideoReceiverStats();
-        }
-
-        public void RequestKeyframe()
-        {
-            KeyframeNeeded?.Invoke();
-        }
-
-        public void Dispose()
-        {
-            _udp.Dispose();
-            _cts?.Cancel();
-        }
-
-        // Compatibility method: accept ReadOnlySpan<byte> datagram like the legacy API
-        public void ProcessRtp(ReadOnlySpan<byte> datagram)
-        {
-            var arr = datagram.ToArray();
-            // if we have a legacy implementation (compat ctor), let it handle the packet
-            if (_legacyImpl != null)
+            catch (OperationCanceledException)
             {
-                _log?.LogDebug("RtpVideoReceiver.ProcessRtp delegating len={Len}", datagram.Length);
-                _legacyImpl.ProcessRtp(datagram);
-                return;
-            }
-
-            if (_depacketizer.AddPacket(arr, out var au))
-            {
-                if (au is { } frame)
-                {
-                    FrameReceived?.Invoke(frame);
-                    AccessUnitReceived?.Invoke(frame);
-                }
             }
         }
+
+        cts?.Dispose();
+    }
+
+    public void ProcessRtp(ReadOnlySpan<byte> datagram) => _engine.ProcessRtp(datagram);
+
+    public void ProcessRtcp(ReadOnlySpan<byte> packet) => _engine.ProcessRtcp(packet);
+
+    public byte[]? CreateReceiverReport(uint reporterSsrc) => _engine.CreateReceiverReport(reporterSsrc);
+
+    public RtpVideoReceiverStats GetStats()
+    {
+        var stats = _engine.GetStats();
+        return new RtpVideoReceiverStats
+        {
+            PacketsReceived = stats.PacketsReceived,
+            BytesReceived = stats.BytesReceived,
+            PacketsLost = stats.PacketsLost
+        };
+    }
+
+    public void RequestKeyframe() => KeyframeNeeded?.Invoke();
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _engine.AccessUnitReceived -= OnAccessUnitReceived;
+        CancellationTokenSource? cts;
+        UdpClient? udpClient;
+        lock (_lifecycleGate)
+        {
+            cts = _cts;
+            udpClient = _udpClient;
+            _cts = null;
+            _udpClient = null;
+            _receiveTask = null;
+        }
+
+        cts?.Cancel();
+        udpClient?.Dispose();
+        cts?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _engine.AccessUnitReceived -= OnAccessUnitReceived;
+        await StopCoreAsync().ConfigureAwait(false);
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task ReceiveLoopAsync(UdpClient udpClient, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var result = await udpClient.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                _engine.ProcessRtp(result.Buffer);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (SocketException exception)
+            {
+                _logger.LogWarning(exception, "RTP receive failed.");
+            }
+        }
+    }
+
+    private void OnAccessUnitReceived(EncodedAccessUnit accessUnit)
+    {
+        var delivered = false;
+        if (FrameReceived is not null)
+        {
+            FrameReceived.Invoke(accessUnit);
+            delivered = true;
+        }
+
+        if (AccessUnitReceived is not null)
+        {
+            AccessUnitReceived.Invoke(accessUnit);
+            delivered = true;
+        }
+
+        if (!delivered) accessUnit.Dispose();
+    }
+
+    private static void ValidateConfiguration(RtpVideoReceiverConfig config, bool requireListeningPort)
+    {
+        if (requireListeningPort && config.LocalPort is <= 0 or > 65535) throw new ArgumentOutOfRangeException(nameof(config.LocalPort));
+        if (!requireListeningPort && config.LocalPort is < 0 or > 65535) throw new ArgumentOutOfRangeException(nameof(config.LocalPort));
+        if (config.PayloadType is < 0 or > 127) throw new ArgumentOutOfRangeException(nameof(config.PayloadType));
+        if (config.JitterBufferMax <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(config.JitterBufferMax));
+        if (config.Codec != CodecKind.H264) throw new NotSupportedException("Only H.264 RTP depacketization is currently supported.");
     }
 }

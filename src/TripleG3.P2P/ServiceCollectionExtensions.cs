@@ -11,6 +11,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IMessageSerializer, NoneMessageSerializer>();
         services.AddSingleton<IMessageSerializer, JsonRawMessageSerializer>();
+        services.AddSingleton<IMessageSerializer, LengthPrefixedMessageSerializer>();
         services.AddSingleton<ISerialBus, UdpSerialBus>();
         return services;
     }

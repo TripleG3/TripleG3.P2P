@@ -4,6 +4,7 @@ public readonly record struct RtpPacketMetadata(uint Timestamp, ushort SequenceN
 
 public interface IVideoPayloadCipher
 {
+    int OverheadBytes => 0;
     ReadOnlySpan<byte> Encrypt(RtpPacketMetadata meta, ReadOnlySpan<byte> payload, Span<byte> output);
     ReadOnlySpan<byte> Decrypt(RtpPacketMetadata meta, ReadOnlySpan<byte> payload, Span<byte> output);
 }

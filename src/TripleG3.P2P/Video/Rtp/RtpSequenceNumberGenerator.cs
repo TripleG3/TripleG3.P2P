@@ -1,6 +1,13 @@
 namespace TripleG3.P2P.Video.Rtp;
 
-internal sealed class RtpSequenceNumberGenerator(ushort initial = 0)
+internal sealed class RtpSequenceNumberGenerator
 {
-    public ushort Next() => unchecked(++initial);
+    private int _value;
+
+    public RtpSequenceNumberGenerator(ushort initial = 0)
+    {
+        _value = initial;
+    }
+
+    public ushort Next() => unchecked((ushort)Interlocked.Increment(ref _value));
 }

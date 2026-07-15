@@ -2,6 +2,7 @@ namespace TripleG3.P2P.Video.Primitives
 {
     public sealed class RtpVideoReceiverConfig
     {
+        public System.Net.IPAddress LocalAddress { get; set; } = System.Net.IPAddress.Any;
         public int LocalPort { get; set; }
         public int PayloadType { get; set; } = 96;
         public uint? ExpectedSsrc { get; set; }

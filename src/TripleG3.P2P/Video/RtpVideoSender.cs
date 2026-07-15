@@ -1,153 +1,187 @@
-using System.Buffers;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
-using TripleG3.P2P.Video.Internal;
-using TripleG3.P2P.Video.Primitives;
+using Microsoft.Extensions.Logging.Abstractions;
 using TripleG3.P2P.Security;
+using TripleG3.P2P.Video.Primitives;
+using TripleG3.P2P.Video.Rtp;
+using PrimitiveSenderStats = TripleG3.P2P.Video.Primitives.RtpVideoSenderStats;
 
-namespace TripleG3.P2P.Video
+namespace TripleG3.P2P.Video;
+
+/// <summary>Canonical high-level RTP video sender.</summary>
+public sealed class RtpVideoSender : Abstractions.IRtpVideoSender
 {
-    /// <summary>
-    /// High-level RTP video sender that packetizes Annex-B access units and sends RTP over UDP.
-    /// </summary>
-    public sealed class RtpVideoSender : IDisposable
+    private readonly H264RtpPacketizer _packetizer;
+    private readonly UdpClient? _udpClient;
+    private readonly Action<ReadOnlyMemory<byte>>? _datagramOutput;
+    private readonly Action<ReadOnlyMemory<byte>>? _rtcpOutput;
+    private readonly ILogger<RtpVideoSender> _logger;
+    private readonly uint _ssrc;
+    private readonly Timer _statsTimer;
+    private long _packetsSent;
+    private long _bytesSent;
+    private long _accessUnitsSent;
+    private long _lastStatsBytes;
+    private long _lastStatsAccessUnits;
+    private int _disposed;
+
+    public RtpVideoSender(
+        RtpVideoSenderConfig config,
+        ICipher? cipher = null,
+        ILogger<RtpVideoSender>? logger = null)
     {
-        private readonly RtpVideoSenderConfig _config;
-        private readonly ICipher? _cipher;
-        private readonly ILogger<RtpVideoSender>? _log;
-    private readonly UdpClient _udp;
-    private readonly Packetizer _packetizer;
-    private readonly Action<ReadOnlyMemory<byte>>? _datagramOutCompat;
-    private readonly Action<ReadOnlyMemory<byte>>? _rtcpOutCompat;
-    // If constructed via compatibility ctor, hold legacy implementation to delegate rich legacy API surface
-    private TripleG3.P2P.Video.Rtp.RtpVideoSender? _legacyImpl;
-        private readonly SequenceNumberGenerator _seq = new SequenceNumberGenerator();
+        ArgumentNullException.ThrowIfNull(config);
+        ValidateConfiguration(config);
+        _logger = logger ?? NullLogger<RtpVideoSender>.Instance;
+        _ssrc = config.Ssrc;
+        var packetCipher = new CoreCipherAdapter(cipher ?? new TripleG3.P2P.Security.NoOpCipher());
+        _packetizer = new H264RtpPacketizer(config.Ssrc, config.Mtu, checked((byte)config.PayloadType), packetCipher);
+        _udpClient = new UdpClient();
+        _udpClient.Connect(config.RemoteIp, config.RemotePort);
+        _statsTimer = new Timer(_ => EmitStats(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
 
-    public event Action<RtpVideoSenderStats>? StatsAvailable;
-        private readonly System.Threading.Timer? _statsTimer;
-        private long _packetsSent;
-        private long _bytesSent;
-        private long _ausSent;
+    public RtpVideoSender(
+        uint ssrc,
+        int mtu,
+        IVideoPayloadCipher cipher,
+        Action<ReadOnlyMemory<byte>> datagramOut,
+        Action<ReadOnlyMemory<byte>>? rtcpOut = null)
+    {
+        ArgumentNullException.ThrowIfNull(cipher);
+        ArgumentNullException.ThrowIfNull(datagramOut);
+        _logger = NullLogger<RtpVideoSender>.Instance;
+        _ssrc = ssrc;
+        _packetizer = new H264RtpPacketizer(ssrc, mtu, new CipherAdapter(cipher));
+        _datagramOutput = datagramOut;
+        _rtcpOutput = rtcpOut;
+        _statsTimer = new Timer(_ => EmitStats(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
 
-    public RtpVideoSender(RtpVideoSenderConfig config, ICipher? cipher = null, ILogger<RtpVideoSender>? log = null)
+    public event Action<PrimitiveSenderStats>? StatsAvailable;
+
+    public void Send(EncodedAccessUnit accessUnit)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_datagramOutput is null)
         {
-            _config = config;
-            _cipher = cipher;
-            _log = log;
-            _udp = new UdpClient();
-            _udp.Connect(config.RemoteIp, config.RemotePort);
-            _packetizer = new Packetizer(config.Mtu, _seq);
-            // Start periodic stats timer (2s default)
-            int intervalMs = Math.Max(500, (int)TimeSpan.FromSeconds(2).TotalMilliseconds);
-            _statsTimer = new System.Threading.Timer(_ => EmitStats(), null, intervalMs, intervalMs);
+            throw new InvalidOperationException("Use SendAsync for a network-backed RTP sender.");
         }
 
-        /// <summary>
-        /// Stable minimal API constructor: provide SSRC, MTU, cipher, and RTP (and optional RTCP) output delegates.
-        /// </summary>
-        public RtpVideoSender(uint ssrc, int mtu, IVideoPayloadCipher cipher, Action<ReadOnlyMemory<byte>> datagramOut, Action<ReadOnlyMemory<byte>>? rtcpOut = null)
-            : this(new RtpVideoSenderConfig { Ssrc = ssrc, Mtu = mtu }, null, null)
+        SendToCallback(accessUnit);
+    }
+
+    public async Task<bool> SendAsync(EncodedAccessUnit accessUnit, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ct.ThrowIfCancellationRequested();
+        try
         {
-            _datagramOutCompat = datagramOut;
-            _rtcpOutCompat = rtcpOut;
-            // legacy impl for richer behavior (stats / RTCP) if available
-            try
+            if (_datagramOutput is not null)
             {
-                var legacyCipher = new CipherAdapter(cipher);
-                if (rtcpOut is null)
-                    _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoSender(ssrc, mtu, (Video.Security.IVideoPayloadCipher)legacyCipher, datagramOut);
-                else
-                    _legacyImpl = new TripleG3.P2P.Video.Rtp.RtpVideoSender(ssrc, mtu, (Video.Security.IVideoPayloadCipher)legacyCipher, datagramOut, rtcpOut);
-            }
-            catch { }
-        }
-
-        // Compatibility Send method: wrap SendAsync for existing tests using Send(EncodedAccessUnit)
-        public void Send(EncodedAccessUnit au)
-        {
-            // Fire-and-forget the async send to keep behavior simple for tests.
-            if (_legacyImpl != null)
-            {
-                _legacyImpl.Send(au);
-                return;
-            }
-            _ = SendAsync(au);
-        }
-
-        // Legacy compatibility surface
-        public void SendSenderReport(uint rtpTimestamp)
-        {
-            _legacyImpl?.SendSenderReport(rtpTimestamp);
-        }
-
-        public void ProcessRtcp(ReadOnlySpan<byte> packet)
-        {
-            _legacyImpl?.ProcessRtcp(packet);
-        }
-
-        /// <summary>Optional simple stats (packet/frame counters).</summary>
-        public RtpVideoSenderStats GetStats()
-        {
-            if (_legacyImpl != null)
-            {
-                var s = _legacyImpl.GetStats();
-                if (s != null) return new RtpVideoSenderStats { PacketsSent = s.PacketsSent, BytesSent = s.BytesSent, AUsSent = (uint)Interlocked.Read(ref _ausSent) };
-            }
-            return new RtpVideoSenderStats
-            {
-                PacketsSent = (uint)Interlocked.Read(ref _packetsSent),
-                BytesSent = (uint)Interlocked.Read(ref _bytesSent),
-                AUsSent = (uint)Interlocked.Read(ref _ausSent)
-            };
-        }
-
-        public async Task<bool> SendAsync(EncodedAccessUnit au, CancellationToken ct = default)
-        {
-            try
-            {
-                foreach (var segment in _packetizer.Packetize(au, _config.PayloadType, _config.Ssrc))
-                {
-                    var arr = segment.Array!;
-                    if (_datagramOutCompat != null)
-                    {
-                        _datagramOutCompat(new ReadOnlyMemory<byte>(arr, 0, segment.Count));
-                    }
-                    else
-                    {
-                        await _udp.SendAsync(arr, segment.Count);
-                    }
-                    System.Threading.Interlocked.Add(ref _packetsSent, 1);
-                    System.Threading.Interlocked.Add(ref _bytesSent, segment.Count);
-                    System.Threading.Interlocked.Add(ref _ausSent, 1);
-                    ArrayPool<byte>.Shared.Return(arr);
-                }
+                SendToCallback(accessUnit);
                 return true;
             }
-            catch (Exception ex)
+
+            var udpClient = _udpClient ?? throw new InvalidOperationException("No RTP output is configured.");
+            foreach (var packet in _packetizer.Packetize(accessUnit))
             {
-                _log?.LogError(ex, "SendAsync failed");
-                return false;
+                ct.ThrowIfCancellationRequested();
+                await udpClient.SendAsync(packet, ct).ConfigureAwait(false);
+                Interlocked.Increment(ref _packetsSent);
+                Interlocked.Add(ref _bytesSent, packet.Length);
             }
+
+            Interlocked.Increment(ref _accessUnitsSent);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is SocketException or IOException or InvalidDataException or NotSupportedException)
+        {
+            _logger.LogError(exception, "RTP access-unit send failed.");
+            return false;
+        }
+    }
+
+    public void SendSenderReport(uint rtpTimestamp)
+    {
+        if (_rtcpOutput is null) return;
+        var report = RtcpPackets.BuildSenderReport(
+            _ssrc,
+            rtpTimestamp,
+            (uint)Interlocked.Read(ref _packetsSent),
+            (uint)Interlocked.Read(ref _bytesSent),
+            out _);
+        _rtcpOutput(report);
+    }
+
+    public void ProcessRtcp(ReadOnlySpan<byte> packet)
+    {
+        if (!RtcpPackets.TryParse(packet, out var parsed) || parsed.Type != RtcpPacketType.ReceiverReport) return;
+        _logger.LogDebug("Received RTCP receiver report from SSRC {Ssrc}.", parsed.Ssrc);
+    }
+
+    public RtpVideoSenderStats GetStats()
+        => new()
+        {
+            PacketsSent = (uint)Interlocked.Read(ref _packetsSent),
+            BytesSent = (uint)Interlocked.Read(ref _bytesSent),
+            AUsSent = (uint)Interlocked.Read(ref _accessUnitsSent)
+        };
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _statsTimer.Dispose();
+        _udpClient?.Dispose();
+    }
+
+    private void SendToCallback(EncodedAccessUnit accessUnit)
+    {
+        foreach (var packet in _packetizer.Packetize(accessUnit))
+        {
+            _datagramOutput!(packet);
+            Interlocked.Increment(ref _packetsSent);
+            Interlocked.Add(ref _bytesSent, packet.Length);
         }
 
-        public void Dispose()
-        {
-            _statsTimer?.Dispose();
-            _udp.Dispose();
-        }
+        Interlocked.Increment(ref _accessUnitsSent);
+    }
 
     private void EmitStats()
+    {
+        var handler = StatsAvailable;
+        if (handler is null) return;
+        var totalBytes = Interlocked.Read(ref _bytesSent);
+        var totalAccessUnits = Interlocked.Read(ref _accessUnitsSent);
+        var intervalBytes = totalBytes - Interlocked.Exchange(ref _lastStatsBytes, totalBytes);
+        var intervalAccessUnits = totalAccessUnits - Interlocked.Exchange(ref _lastStatsAccessUnits, totalAccessUnits);
+        try
         {
-            try
+            handler(new PrimitiveSenderStats
             {
-        if (StatsAvailable == null) return;
-        StatsAvailable?.Invoke(GetStats());
-                // reset counters for next interval
-                Interlocked.Exchange(ref _bytesSent, 0);
-                Interlocked.Exchange(ref _packetsSent, 0);
-                Interlocked.Exchange(ref _ausSent, 0);
-            }
-            catch { }
+                Timestamp = DateTimeOffset.UtcNow,
+                BitrateKbps = intervalBytes * 8 / 2000.0,
+                FrameRate = intervalAccessUnits / 2.0,
+                PacketsSent = (uint)Interlocked.Read(ref _packetsSent),
+                AUsSent = (uint)totalAccessUnits
+            });
         }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "An RTP sender stats subscriber failed.");
+        }
+    }
+
+    private static void ValidateConfiguration(RtpVideoSenderConfig config)
+    {
+        if (string.IsNullOrWhiteSpace(config.RemoteIp)) throw new ArgumentException("RemoteIp is required.", nameof(config));
+        if (config.RemotePort is <= 0 or > 65535) throw new ArgumentOutOfRangeException(nameof(config.RemotePort));
+        if (config.PayloadType is < 0 or > 127) throw new ArgumentOutOfRangeException(nameof(config.PayloadType));
+        if (config.Mtu <= RtpPacket.HeaderLength + 2) throw new ArgumentOutOfRangeException(nameof(config.Mtu));
+        if (config.Codec != CodecKind.H264) throw new NotSupportedException("Only H.264 RTP packetization is currently supported.");
     }
 }

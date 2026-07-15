@@ -15,18 +15,16 @@ public class JitterAndLossTests
     public void LossTracking_Increments_When_SequenceGap()
     {
     var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x55, 1200, new TripleG3.P2P.Video.Security.NoOpCipher());
-        using var au = BuildAu([0x61, 1, 2, 3], 1000);
+        var nal = new byte[3000];
+        nal[0] = 0x61;
+        using var au = BuildAu(nal, 1000);
         var packets = pktizer.Packetize(au).ToList();
-        // Drop middle (if multiple) else simulate by removing none if single
-        if (packets.Count > 2) packets.RemoveAt(1);
-    var recv = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.NoOpCipher());
+        Assert.True(packets.Count > 2);
+        packets.RemoveAt(1);
+    using var recv = new TripleG3.P2P.Video.RtpVideoReceiver(new TripleG3.P2P.Video.NoOpCipher());
         foreach (var p in packets) recv.ProcessRtp(p.Span);
         var stats = recv.GetStats();
-        Assert.NotNull(stats);
-        if (packets.Count > 1)
-            Assert.True(stats!.PacketsLost >= 1);
-        else
-            Assert.Equal<uint>(0, stats!.PacketsLost);
+        Assert.True(stats.PacketsLost >= 1);
     }
 
     [Fact]

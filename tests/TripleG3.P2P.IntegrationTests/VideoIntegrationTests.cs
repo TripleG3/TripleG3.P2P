@@ -92,18 +92,15 @@ public class VideoIntegrationTests
         Assert.NotNull(rrBytes);
         sender.ProcessRtcp(rrBytes!);
 
-    var sStats = sender.GetStats();
     var rStats = receiver.GetStats();
-    // RTT estimate removed from minimal stats
-        // Loss accounting: if we dropped a packet, PacketsLost >=1
-    if (rtpPackets.Count > 1) Assert.True((rStats?.PacketsLost ?? 0) >= 0);
+        Assert.True(rStats.PacketsLost >= 1);
     }
 
     [Fact]
     public async Task Negotiation_Keyframe_Request_Invokes_Encoder()
     {
-    var chOffer = new TripleG3.P2P.Video.InMemoryControlChannel();
-    var chAnswer = new TripleG3.P2P.Video.InMemoryControlChannel();
+    await using var chOffer = new TripleG3.P2P.Video.InMemoryControlChannel();
+    await using var chAnswer = new TripleG3.P2P.Video.InMemoryControlChannel();
         chOffer.MessageReceived += m => chAnswer.SendReliableAsync(m);
         chAnswer.MessageReceived += m => chOffer.SendReliableAsync(m);
         var offerMgr = new TripleG3.P2P.Video.Negotiation.NegotiationManager(chOffer);
@@ -115,7 +112,7 @@ public class VideoIntegrationTests
     await offerMgr.CreateOfferAsync(new TripleG3.P2P.Video.VideoSessionConfig(640, 360, 400_000, 30));
         // allow messages
         await Task.Delay(50);
-        offerMgr.RequestKeyFrame();
+        await offerMgr.RequestKeyFrameAsync();
         await Task.Delay(50);
         Assert.True(fakeEnc.KeyRequested);
     }

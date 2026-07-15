@@ -2,151 +2,416 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Text.Json;
 using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
 using TripleG3.P2P.Serialization;
-using TripleG3.P2P.Attributes;
 
 namespace TripleG3.P2P.Tcp;
 
 /// <summary>
-/// TCP implementation of <see cref="ISerialBus"/>. Maintains a listener (if configured via <see cref="ProtocolConfiguration.LocalPort"/>)
-/// and outgoing connections to the configured <see cref="ProtocolConfiguration.RemoteEndPoint"/> plus any <see cref="ProtocolConfiguration.BroadcastEndPoints"/>.
-/// Connections are established lazily on first send; inbound accepted sockets are added to the connection set for fan-out.
+/// TCP serial bus. Accepted sockets are receive-only sessions; outbound data is sent only to configured endpoints.
 /// </summary>
-public sealed class TcpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
+public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
+    private readonly ILogger<TcpSerialBus> _logger;
+    private readonly ConcurrentDictionary<string, (Guid Id, Type Type, Delegate Handler)[]> _subscriptions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TcpConnection> _outboundConnections = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<long, TcpConnection> _inboundConnections = new();
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
+    private readonly object _lifecycleGate = new();
+    private readonly object _receiveTasksGate = new();
+    private readonly List<Task> _receiveTasks = [];
+
     private ProtocolConfiguration? _config;
     private CancellationTokenSource? _cts;
     private TcpListener? _listener;
+    private Task? _acceptTask;
+    private long _inboundId;
+    private int _disposed;
 
-    private sealed record SubscriptionEntry(Type Type, Delegate Handler);
-    private readonly ConcurrentDictionary<string, List<SubscriptionEntry>> _subscriptions = new(StringComparer.Ordinal);
+    public TcpSerialBus(IEnumerable<IMessageSerializer> serializers)
+        : this(serializers, NullLogger<TcpSerialBus>.Instance)
+    {
+    }
 
-    // Active outbound / inbound connections
-    private readonly ConcurrentDictionary<string, TcpClient> _clients = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim _connectLock = new(1,1);
+    public TcpSerialBus(IEnumerable<IMessageSerializer> serializers, ILogger<TcpSerialBus> logger)
+    {
+        ArgumentNullException.ThrowIfNull(serializers);
+        ArgumentNullException.ThrowIfNull(logger);
+        _serializers = serializers.ToDictionary(serializer => serializer.Protocol, serializer => serializer);
+        _logger = logger;
+    }
 
-    public bool IsListening => _listener != null;
+    public bool IsListening => Volatile.Read(ref _listener) is not null;
 
     public ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
     {
-        if (IsListening) return ValueTask.CompletedTask;
-        _config = config;
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _listener = new TcpListener(IPAddress.Any, config.LocalPort);
-        _listener.Start();
-        _ = AcceptLoopAsync(_cts.Token);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ArgumentNullException.ThrowIfNull(config);
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateConfiguration(config);
+
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_listener is not null) return ValueTask.CompletedTask;
+
+            _config = config;
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _listener = new TcpListener(config.LocalAddress, config.LocalPort);
+            _listener.Start();
+            _acceptTask = AcceptLoopAsync(_listener, _cts.Token);
+        }
+
         return ValueTask.CompletedTask;
     }
 
-    private async Task AcceptLoopAsync(CancellationToken token)
+    public void SubscribeTo<T>(Action<T> handler) => _ = Subscribe(handler);
+
+    public IDisposable Subscribe<T>(Action<T> handler)
     {
-        if (_listener is null) return;
-        while (!token.IsCancellationRequested)
+        ArgumentNullException.ThrowIfNull(handler);
+        var protocolName = GetProtocolTypeName(typeof(T));
+        var id = Guid.NewGuid();
+        var entry = (Id: id, Type: typeof(T), Handler: (Delegate)handler);
+        _subscriptions.AddOrUpdate(protocolName, [entry], (_, current) => [.. current, entry]);
+
+        return new SubscriptionRegistration(() =>
+            _subscriptions.AddOrUpdate(
+                protocolName,
+                [],
+                (_, current) => [.. current.Where(item => item.Id != id)]));
+    }
+
+    public async ValueTask SendAsync<T>(
+        T message,
+        MessageType messageType = MessageType.Data,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var config = _config ?? throw new InvalidOperationException("Configuration not set. Call StartListeningAsync first.");
+        if (!_serializers.TryGetValue(config.SerializationProtocol, out var serializer))
+        {
+            throw new InvalidOperationException($"Serializer {config.SerializationProtocol} is not registered.");
+        }
+
+        if (!Enum.IsDefined(messageType))
+        {
+            throw new ArgumentOutOfRangeException(nameof(messageType));
+        }
+
+        var connectionFailures = await EnsureConnectionsAsync(config, cancellationToken).ConfigureAwait(false);
+        var body = serializer.Serialize(new Envelope<T>(GetProtocolTypeName(typeof(T)), message));
+        if (body.Length > config.MaxPayloadBytes)
+        {
+            throw new InvalidDataException($"Serialized payload exceeds the {config.MaxPayloadBytes}-byte configured limit.");
+        }
+
+        var frame = new byte[UdpHeader.Size + body.Length];
+        new UdpHeader(body.Length, (short)messageType, config.SerializationProtocol).Write(frame);
+        body.CopyTo(frame.AsSpan(UdpHeader.Size));
+
+        var failures = new List<Exception>(connectionFailures);
+        var successCount = 0;
+        var targets = _outboundConnections.ToArray();
+        foreach (var target in targets)
+        {
+            try
+            {
+                await target.Value.SendAsync(frame, cancellationToken).ConfigureAwait(false);
+                successCount++;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is SocketException or IOException or ObjectDisposedException)
+            {
+                failures.Add(exception);
+                RemoveOutbound(target.Key, target.Value);
+                _logger.LogWarning(exception, "TCP send to {RemoteEndPoint} failed.", target.Key);
+            }
+        }
+
+        if (successCount == 0)
+        {
+            throw new AggregateException("TCP send failed for every configured endpoint.", failures);
+        }
+
+        if (failures.Count > 0)
+        {
+            _logger.LogWarning(
+                "TCP broadcast completed partially: {Succeeded} of {Attempted} endpoints succeeded.",
+                successCount,
+                GetConfiguredEndpoints(config).Count);
+        }
+    }
+
+    public async ValueTask CloseConnectionAsync()
+    {
+        TcpListener? listener;
+        CancellationTokenSource? cts;
+        Task? acceptTask;
+
+        lock (_lifecycleGate)
+        {
+            listener = _listener;
+            cts = _cts;
+            acceptTask = _acceptTask;
+            _listener = null;
+            _cts = null;
+            _acceptTask = null;
+            _config = null;
+        }
+
+        if (listener is null) return;
+        cts?.Cancel();
+        listener.Stop();
+
+        foreach (var outbound in _outboundConnections.ToArray()) RemoveOutbound(outbound.Key, outbound.Value);
+        foreach (var inbound in _inboundConnections.ToArray()) RemoveInbound(inbound.Key, inbound.Value);
+
+        if (acceptTask is not null)
+        {
+            try
+            {
+                await acceptTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        Task[] receiveTasks;
+        lock (_receiveTasksGate)
+        {
+            receiveTasks = [.. _receiveTasks];
+            _receiveTasks.Clear();
+        }
+
+        if (receiveTasks.Length > 0)
+        {
+            await Task.WhenAll(receiveTasks).ConfigureAwait(false);
+        }
+
+        cts?.Dispose();
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        CancellationTokenSource? cts;
+        TcpListener? listener;
+        lock (_lifecycleGate)
+        {
+            cts = _cts;
+            listener = _listener;
+            _cts = null;
+            _listener = null;
+            _acceptTask = null;
+            _config = null;
+        }
+
+        cts?.Cancel();
+        listener?.Stop();
+        foreach (var outbound in _outboundConnections.ToArray()) RemoveOutbound(outbound.Key, outbound.Value);
+        foreach (var inbound in _inboundConnections.ToArray()) RemoveInbound(inbound.Key, inbound.Value);
+        cts?.Dispose();
+        _connectGate.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        await CloseConnectionAsync().ConfigureAwait(false);
+        _connectGate.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task AcceptLoopAsync(TcpListener listener, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
         {
             TcpClient? client = null;
             try
             {
-                client = await _listener.AcceptTcpClientAsync(token);
-                var key = ((IPEndPoint)client.Client.RemoteEndPoint!).ToString();
-                _clients[key] = client;
-                _ = ReceiveLoopAsync(client, token);
+                client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                client.NoDelay = true;
+                var config = _config;
+                if (config is null || _inboundConnections.Count >= config.MaxInboundConnections)
+                {
+                    _logger.LogWarning("Rejected TCP connection because the inbound session limit was reached.");
+                    client.Dispose();
+                    continue;
+                }
+
+                var remoteEndPoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+                var id = Interlocked.Increment(ref _inboundId);
+                var connection = new TcpConnection($"inbound:{id}:{remoteEndPoint}", client);
+                if (!_inboundConnections.TryAdd(id, connection))
+                {
+                    connection.Dispose();
+                    continue;
+                }
+
+                TrackReceiveTask(ReceiveLoopAsync(connection, cancellationToken, () => RemoveInbound(id, connection)));
             }
-            catch (OperationCanceledException) { break; }
-            catch { client?.Dispose(); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception) when (exception is SocketException or IOException)
+            {
+                client?.Dispose();
+                _logger.LogWarning(exception, "TCP accept failed.");
+            }
         }
     }
 
-    private async Task EnsureConnectionsAsync()
+    private async Task<IReadOnlyCollection<Exception>> EnsureConnectionsAsync(
+        ProtocolConfiguration config,
+        CancellationToken cancellationToken)
     {
-        if (_config is null) return;
-        await _connectLock.WaitAsync();
+        var failures = new List<Exception>();
+        await _connectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            async Task ConnectToAsync(IPEndPoint ep)
+            foreach (var endpoint in GetConfiguredEndpoints(config))
             {
-                var key = ep.ToString();
-                if (_clients.ContainsKey(key)) return;
-                var client = new TcpClient();
+                var key = endpoint.ToString();
+                if (_outboundConnections.TryGetValue(key, out var existing) && !existing.IsDisposed) continue;
+                if (existing is not null) RemoveOutbound(key, existing);
+
+                var client = new TcpClient(endpoint.AddressFamily) { NoDelay = true };
                 try
                 {
-                    await client.ConnectAsync(ep.Address, ep.Port);
-                    _clients[key] = client;
-                    _ = ReceiveLoopAsync(client, _cts!.Token);
+                    await client.ConnectAsync(endpoint.Address, endpoint.Port, cancellationToken).ConfigureAwait(false);
+                    var connection = new TcpConnection(key, client);
+                    if (_outboundConnections.TryAdd(key, connection))
+                    {
+                        TrackReceiveTask(ReceiveLoopAsync(connection, cancellationToken, () => RemoveOutbound(key, connection)));
+                    }
+                    else
+                    {
+                        connection.Dispose();
+                    }
                 }
-                catch
+                catch (OperationCanceledException)
                 {
                     client.Dispose();
+                    throw;
+                }
+                catch (Exception exception) when (exception is SocketException or IOException)
+                {
+                    client.Dispose();
+                    var failure = new IOException($"Could not connect to configured TCP endpoint {endpoint}.", exception);
+                    failures.Add(failure);
+                    _logger.LogWarning(exception, "TCP connection to {RemoteEndPoint} failed.", endpoint);
                 }
             }
-            await ConnectToAsync(_config.RemoteEndPoint);
-            foreach (var ep in _config.BroadcastEndPoints)
-                await ConnectToAsync(ep);
         }
-        finally { _connectLock.Release(); }
+        finally
+        {
+            _connectGate.Release();
+        }
+
+        return failures;
     }
 
-    private async Task ReceiveLoopAsync(TcpClient client, CancellationToken token)
+    private async Task ReceiveLoopAsync(TcpConnection connection, CancellationToken cancellationToken, Action removeConnection)
     {
-        var stream = client.GetStream();
-        var headerBuffer = new byte[8];
-        while (!token.IsCancellationRequested)
-        {
-            try
-            {
-                if (!await ReadExactAsync(stream, headerBuffer, token)) break;
-                int length = BitConverter.ToInt32(headerBuffer, 0);
-                short messageType = BitConverter.ToInt16(headerBuffer, 4);
-                short protoVal = BitConverter.ToInt16(headerBuffer, 6);
-                if (length <= 0 || length > 10_000_000) break; // sanity
-                var payload = new byte[length];
-                if (!await ReadExactAsync(stream, payload, token)) break;
-                ProcessIncoming(payload, (SerializationProtocol)protoVal);
-            }
-            catch (OperationCanceledException) { break; }
-            catch { break; }
-        }
+        var headerBuffer = new byte[UdpHeader.Size];
         try
         {
-            client.Close();
-            var key = ((IPEndPoint)client.Client.RemoteEndPoint!).ToString();
-            _clients.TryRemove(key, out _);
-        }
-        catch { }
-    }
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (!await ReadExactAsync(connection.Stream, headerBuffer, cancellationToken).ConfigureAwait(false)) break;
+                var header = UdpHeader.Read(headerBuffer);
+                var config = _config;
+                if (config is null) break;
+                if (header.Length <= 0 || header.Length > config.MaxPayloadBytes)
+                {
+                    _logger.LogWarning("Rejected TCP frame from {RemoteEndPoint} with payload length {PayloadLength}.", connection.Key, header.Length);
+                    break;
+                }
 
-    private static async Task<bool> ReadExactAsync(NetworkStream stream, byte[] buffer, CancellationToken token)
-    {
-        int offset = 0;
-        while (offset < buffer.Length)
-        {
-            int read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), token);
-            if (read == 0) return false;
-            offset += read;
+                if (!Enum.IsDefined((MessageType)header.MessageType))
+                {
+                    _logger.LogWarning("Rejected TCP frame from {RemoteEndPoint} with unknown message type {MessageType}.", connection.Key, header.MessageType);
+                    break;
+                }
+
+                if (!_serializers.ContainsKey(header.SerializationProtocol))
+                {
+                    _logger.LogWarning("Rejected TCP frame from {RemoteEndPoint} with unknown protocol {Protocol}.", connection.Key, (short)header.SerializationProtocol);
+                    break;
+                }
+
+                var payload = new byte[header.Length];
+                if (!await ReadExactAsync(connection.Stream, payload, cancellationToken).ConfigureAwait(false)) break;
+                ProcessIncoming(payload, header.SerializationProtocol);
+            }
         }
-        return true;
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested || connection.IsDisposed)
+        {
+        }
+        catch (Exception exception) when (exception is SocketException or IOException or JsonException or DecoderFallbackException)
+        {
+            _logger.LogWarning(exception, "TCP receive loop for {RemoteEndPoint} stopped.", connection.Key);
+        }
+        finally
+        {
+            removeConnection();
+        }
     }
 
     private void ProcessIncoming(byte[] payload, SerializationProtocol protocol)
     {
-        if (!_serializers.TryGetValue(protocol, out var serializer)) serializer = _serializers[SerializationProtocol.None];
+        if (!_serializers.TryGetValue(protocol, out var serializer)) return;
         var protocolName = TryExtractTypeName(payload, protocol);
-        if (string.IsNullOrEmpty(protocolName)) return;
-        if (!_subscriptions.TryGetValue(protocolName, out var entries)) return;
+        if (string.IsNullOrEmpty(protocolName) || !_subscriptions.TryGetValue(protocolName, out var entries)) return;
 
         foreach (var entry in entries)
         {
-            var envelopeType = typeof(Envelope<>).MakeGenericType(entry.Type);
-            object? envelopeObj = null;
-            try { envelopeObj = serializer.Deserialize(envelopeType, payload); } catch { continue; }
-            if (envelopeObj is null) continue;
-            var messageProp = envelopeType.GetProperty("Message");
-            if (messageProp?.GetValue(envelopeObj) is not { } msg) continue;
-            try { entry.Handler.DynamicInvoke(msg); } catch { }
+            try
+            {
+                var envelopeType = typeof(Envelope<>).MakeGenericType(entry.Type);
+                var envelope = serializer.Deserialize(envelopeType, payload);
+                var message = envelopeType.GetProperty(nameof(Envelope<object>.Message))?.GetValue(envelope);
+                entry.Handler.DynamicInvoke(message);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception, "TCP subscriber for {MessageType} failed.", entry.Type);
+            }
         }
+    }
+
+    private static async Task<bool> ReadExactAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer[offset..], cancellationToken).ConfigureAwait(false);
+            if (read == 0) return false;
+            offset += read;
+        }
+
+        return true;
     }
 
     private static string? TryExtractTypeName(ReadOnlySpan<byte> payload, SerializationProtocol protocol)
@@ -155,79 +420,74 @@ public sealed class TcpSerialBus(IEnumerable<IMessageSerializer> serializers) : 
         {
             if (protocol == SerializationProtocol.None)
             {
-                var delimiter = Encoding.UTF8.GetBytes("@-@");
-                int idx = payload.IndexOf(delimiter);
-                if (idx < 0) return Encoding.UTF8.GetString(payload);
-                return Encoding.UTF8.GetString(payload[..idx]);
+                var delimiter = "@-@"u8;
+                var index = payload.IndexOf(delimiter);
+                return StrictUtf8.GetString(index < 0 ? payload : payload[..index]);
             }
-            else if (protocol == SerializationProtocol.JsonRaw)
+
+            if (protocol == SerializationProtocol.JsonRaw)
             {
-                using var doc = JsonDocument.Parse(payload.ToArray());
-                var root = doc.RootElement;
-                if (root.TryGetProperty("typeName", out var tn)) return tn.GetString();
-                if (root.TryGetProperty("TypeName", out var tn2)) return tn2.GetString();
+                using var document = JsonDocument.Parse(payload.ToArray());
+                var root = document.RootElement;
+                if (root.TryGetProperty("typeName", out var camelCase)) return camelCase.GetString();
+                if (root.TryGetProperty("TypeName", out var pascalCase)) return pascalCase.GetString();
+            }
+
+            if (protocol == SerializationProtocol.LengthPrefixed)
+            {
+                return LengthPrefixedMessageSerializer.TryExtractTypeName(payload);
             }
         }
-        catch { }
+        catch (Exception exception) when (exception is JsonException or DecoderFallbackException)
+        {
+        }
+
         return null;
     }
 
     private static string GetProtocolTypeName(Type type)
     {
-        var attr = type.GetCustomAttribute<UdpMessageAttribute>();
-        if (attr?.Name is { Length: > 0 } n) return n;
-        return type.Name;
+        var attribute = type.GetCustomAttribute<UdpMessageAttribute>();
+        return attribute?.Name is { Length: > 0 } name ? name : type.Name;
     }
 
-    public void SubscribeTo<T>(Action<T> handler)
+    private static IReadOnlyList<IPEndPoint> GetConfiguredEndpoints(ProtocolConfiguration config)
+        => [.. new[] { config.RemoteEndPoint }
+            .Concat(config.BroadcastEndPoints)
+            .DistinctBy(endpoint => endpoint.ToString(), StringComparer.Ordinal)];
+
+    private void TrackReceiveTask(Task task)
     {
-        var protocolName = GetProtocolTypeName(typeof(T));
-        var list = _subscriptions.GetOrAdd(protocolName, _ => []);
-        list.Add(new SubscriptionEntry(typeof(T), handler));
-    }
-
-    public async ValueTask SendAsync<T>(T message, MessageType messageType = MessageType.Data, CancellationToken cancellationToken = default)
-    {
-        if (_config is null) throw new InvalidOperationException("Configuration not set. Call StartListeningAsync first.");
-        if (!_serializers.TryGetValue(_config.SerializationProtocol, out var serializer)) serializer = _serializers[SerializationProtocol.None];
-
-        await EnsureConnectionsAsync();
-
-        var typeName = GetProtocolTypeName(typeof(T));
-        var envelope = new Envelope<T>(typeName, message);
-        byte[] body = serializer.Serialize(envelope);
-        var buffer = new byte[8 + body.Length];
-        BitConverter.GetBytes(body.Length).CopyTo(buffer, 0);
-        BitConverter.GetBytes((short)messageType).CopyTo(buffer, 4);
-        BitConverter.GetBytes((short)_config.SerializationProtocol).CopyTo(buffer, 6);
-        body.CopyTo(buffer, 8);
-
-        foreach (var kv in _clients.ToArray())
+        lock (_receiveTasksGate)
         {
-            try
-            {
-                if (!kv.Value.Connected) { _clients.TryRemove(kv.Key, out _); continue; }
-                var stream = kv.Value.GetStream();
-                await stream.WriteAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
-                await stream.FlushAsync(cancellationToken);
-            }
-            catch { }
+            _receiveTasks.RemoveAll(candidate => candidate.IsCompleted);
+            _receiveTasks.Add(task);
         }
     }
 
-    public async ValueTask CloseConnectionAsync()
+    private void RemoveOutbound(string key, TcpConnection connection)
     {
-        try { _cts?.Cancel(); } catch { }
-        _listener?.Stop();
-        foreach (var c in _clients.Values) { try { c.Close(); } catch { } }
-        _clients.Clear();
-        await Task.Yield();
+        var collection = (ICollection<KeyValuePair<string, TcpConnection>>)_outboundConnections;
+        collection.Remove(new KeyValuePair<string, TcpConnection>(key, connection));
+        connection.Dispose();
     }
 
-    public void Dispose()
+    private void RemoveInbound(long id, TcpConnection connection)
     {
-        _ = CloseConnectionAsync();
-        _cts?.Dispose();
-        _connectLock.Dispose();
+        var collection = (ICollection<KeyValuePair<long, TcpConnection>>)_inboundConnections;
+        collection.Remove(new KeyValuePair<long, TcpConnection>(id, connection));
+        connection.Dispose();
+    }
+
+    private void ValidateConfiguration(ProtocolConfiguration config)
+    {
+        if (config.LocalPort is < 0 or > IPEndPoint.MaxPort) throw new ArgumentOutOfRangeException(nameof(config.LocalPort));
+        if (config.RemoteEndPoint.Port == 0) throw new ArgumentException("RemoteEndPoint must use a non-zero port.", nameof(config));
+        if (config.MaxPayloadBytes <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxPayloadBytes));
+        if (config.MaxInboundConnections <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxInboundConnections));
+        if (!_serializers.ContainsKey(config.SerializationProtocol))
+        {
+            throw new ArgumentException($"Serializer {config.SerializationProtocol} is not registered.", nameof(config));
+        }
     }
 }

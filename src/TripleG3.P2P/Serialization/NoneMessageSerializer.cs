@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Reflection;
 using System.Text;
 using TripleG3.P2P.Core;
 
@@ -13,13 +11,12 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 {
     public SerializationProtocol Protocol => SerializationProtocol.None;
 
-    private static readonly ConcurrentDictionary<Type, (PropertyInfo Prop, int Order)[]> _cache = new();
     private static readonly byte[] Delimiter = Encoding.UTF8.GetBytes("@-@");
 
     public byte[] Serialize<T>(T value)
-        => SerializeInternal(value, typeof(T));
+        => SerializeInternal(value);
 
-    private byte[] SerializeInternal(object? value, Type? declaredType = null)
+    private byte[] SerializeInternal(object? value)
     {
         if (value is null) return [];
         var type = value.GetType();
@@ -43,29 +40,27 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             return buffer;
         }
 
-        var props = _cache.GetOrAdd(type, t => [.. t.GetProperties()
-            .Select(p => (p, attr: p.GetCustomAttribute<Attributes.UdpAttribute>()))
-            .Where(x => x.attr != null)
-            .Select(x => (x.p, x.attr!.Order ?? int.MaxValue))
-            .OrderBy(x => x.Item2)]);
-        if (props.Length == 0)
+        if (PrimitiveValueConverter.IsSupported(type))
         {
-            return Encoding.UTF8.GetBytes(value.ToString() ?? string.Empty);
+            return Encoding.UTF8.GetBytes(PrimitiveValueConverter.Format(value, type));
         }
 
-        var serializedProps = new byte[props.Length][];
+        var contract = SerializationContract.For(type);
+        var properties = contract.Properties;
+
+        var serializedProps = new byte[properties.Count][];
         int total = 0;
-        for (int i = 0; i < props.Length; i++)
+        for (int i = 0; i < properties.Count; i++)
         {
-            var v = props[i].Prop.GetValue(value);
-            byte[] bytes = v is null
+            var propertyValue = properties[i].GetValue(value);
+            byte[] bytes = propertyValue is null
                 ? []
-                : IsPrimitiveLike(v.GetType())
-                    ? Encoding.UTF8.GetBytes(v.ToString() ?? string.Empty)
-                    : SerializeInternal(v);
+                : PrimitiveValueConverter.IsSupported(properties[i].PropertyType)
+                    ? Encoding.UTF8.GetBytes(PrimitiveValueConverter.Format(propertyValue, properties[i].PropertyType))
+                    : SerializeInternal(propertyValue);
             serializedProps[i] = bytes;
             total += bytes.Length;
-            if (i < props.Length - 1) total += Delimiter.Length;
+            if (i < properties.Count - 1) total += Delimiter.Length;
         }
         var buffer2 = new byte[total];
         var span2 = buffer2.AsSpan();
@@ -84,9 +79,6 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
         return buffer2;
     }
 
-    private static bool IsPrimitiveLike(Type t)
-        => t.IsPrimitive || t.IsEnum || t == typeof(string) || t == typeof(Guid) || t == typeof(DateTime) || t == typeof(DateTimeOffset) || t == typeof(decimal);
-
     public T? Deserialize<T>(ReadOnlySpan<byte> data)
     {
         var obj = Deserialize(typeof(T), data);
@@ -95,11 +87,10 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 
     public object? Deserialize(Type type, ReadOnlySpan<byte> data)
     {
-        if (type == typeof(string)) return Encoding.UTF8.GetString(data);
-        if (IsPrimitiveLike(type) && type != typeof(string))
+        if (PrimitiveValueConverter.IsSupported(type))
         {
             var strVal = Encoding.UTF8.GetString(data);
-            return ConvertFromString(strVal, type);
+            return PrimitiveValueConverter.Parse(strVal, type);
         }
 
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Envelope<>))
@@ -123,24 +114,17 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
             {
                 messageObj = Deserialize(innerType, messageData);
             }
-            var ctorEnv = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-                .FirstOrDefault(c => c.GetParameters().Length == 2);
-            if (ctorEnv is null) return null;
-            return ctorEnv.Invoke([typeName, messageObj]);
+            return Activator.CreateInstance(type, typeName, messageObj);
         }
 
-        var ctor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-            .OrderByDescending(c => c.GetParameters().Length)
-            .FirstOrDefault();
-        if (ctor == null) return null;
-        var parameters = ctor.GetParameters();
-        if (parameters.Length == 0) return ctor.Invoke(null);
+        var contract = SerializationContract.For(type);
+        var properties = contract.Properties;
 
-        var parts = Split(data, Delimiter, parameters.Length);
-        var args = new object?[parameters.Length];
-        for (int i = 0; i < parameters.Length; i++)
+        var parts = Split(data, Delimiter, properties.Count);
+        var values = new object?[properties.Count];
+        for (int i = 0; i < properties.Count; i++)
         {
-            var pType = parameters[i].ParameterType;
+            var propertyType = properties[i].PropertyType;
             ReadOnlySpan<byte> slice = [];
             if (i < parts.Length)
             {
@@ -151,24 +135,15 @@ internal sealed class NoneMessageSerializer : IMessageSerializer
 
             if (slice.IsEmpty)
             {
-                args[i] = pType.IsValueType ? Activator.CreateInstance(pType) : null;
+                values[i] = PrimitiveValueConverter.DefaultValue(propertyType);
                 continue;
             }
 
-            args[i] = IsPrimitiveLike(pType)
-                ? ConvertFromString(Encoding.UTF8.GetString(slice), pType)
-                : Deserialize(pType, slice);
+            values[i] = PrimitiveValueConverter.IsSupported(propertyType)
+                ? PrimitiveValueConverter.Parse(Encoding.UTF8.GetString(slice), propertyType)
+                : Deserialize(propertyType, slice);
         }
-        return ctor.Invoke(args);
-    }
-
-    private static object? ConvertFromString(string value, Type targetType)
-    {
-        if (targetType == typeof(string)) return value;
-        if (targetType.IsEnum) return string.IsNullOrEmpty(value) ? Activator.CreateInstance(targetType) : Enum.Parse(targetType, value, true);
-        if (targetType == typeof(Guid)) return string.IsNullOrEmpty(value) ? Guid.Empty : Guid.Parse(value);
-        if (string.IsNullOrEmpty(value)) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
-        return Convert.ChangeType(value, targetType);
+        return contract.Create(values);
     }
 
     private static (int start, int length)[] Split(ReadOnlySpan<byte> data, ReadOnlySpan<byte> delimiter, int maxParts)

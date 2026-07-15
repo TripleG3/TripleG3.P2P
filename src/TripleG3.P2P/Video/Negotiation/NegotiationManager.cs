@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace TripleG3.P2P.Video.Negotiation;
 
@@ -8,6 +10,7 @@ public interface IVideoSessionController
     Task<SessionAnswer> AcceptOfferAsync(SessionOffer offer);
     Task ApplyAnswerAsync(SessionAnswer answer);
     void RequestKeyFrame();
+    Task RequestKeyFrameAsync(CancellationToken cancellationToken = default);
     event Action<SessionOffer>? OfferReceived;
     event Action<SessionAnswer>? AnswerReceived;
     event Action? PliReceived;
@@ -16,6 +19,7 @@ public interface IVideoSessionController
 public sealed class NegotiationManager : IVideoSessionController
 {
     private readonly IControlChannel _control;
+    private readonly ILogger<NegotiationManager> _logger;
     private SessionOffer? _localOffer;
     private SessionAnswer? _remoteAnswer;
 
@@ -23,22 +27,29 @@ public sealed class NegotiationManager : IVideoSessionController
     public event Action<SessionAnswer>? AnswerReceived;
     public event Action? PliReceived;
 
-    public NegotiationManager(IControlChannel control)
+    public NegotiationManager(IControlChannel control, ILogger<NegotiationManager>? logger = null)
     {
         _control = control;
+        _logger = logger ?? NullLogger<NegotiationManager>.Instance;
         _control.MessageReceived += OnControlMessage;
     }
 
     private IVideoEncoder? _attachedEncoder;
     public void AttachEncoder(IVideoEncoder encoder)
     {
+        ArgumentNullException.ThrowIfNull(encoder);
         _attachedEncoder = encoder;
-        PliReceived += () => _attachedEncoder?.RequestKeyFrame();
     }
 
     public async Task<SessionOffer> CreateOfferAsync(VideoSessionConfig cfg)
     {
-        var offer = new SessionOffer(cfg.Codec, "42e01f", cfg.Width, cfg.Height, cfg.Bitrate, ""); // TODO supply SPS/PPS
+        var offer = new SessionOffer(
+            cfg.Codec,
+            cfg.ProfileLevelId,
+            cfg.Width,
+            cfg.Height,
+            cfg.Bitrate,
+            cfg.SpropParameterSets);
         _localOffer = offer;
         await SendAsync(NegotiationTypes.Offer, offer);
         return offer;
@@ -55,17 +66,19 @@ public sealed class NegotiationManager : IVideoSessionController
 
     public Task ApplyAnswerAsync(SessionAnswer answer)
     {
-        _remoteAnswer = answer;
-        AnswerReceived?.Invoke(answer);
+        ApplyAnswer(answer);
         return Task.CompletedTask;
     }
 
-    public void RequestKeyFrame() => SendAsync(NegotiationTypes.Pli, new { });
+    public void RequestKeyFrame() => _ = SendKeyFrameRequestObservedAsync();
 
-    private Task SendAsync(string type, object payload)
+    public Task RequestKeyFrameAsync(CancellationToken cancellationToken = default)
+        => SendAsync(NegotiationTypes.Pli, new { }, cancellationToken);
+
+    private Task SendAsync(string type, object payload, CancellationToken cancellationToken = default)
     {
         var json = JsonSerializer.Serialize(new { type, payload });
-        return _control.SendReliableAsync(json);
+        return _control.SendReliableAsync(json, cancellationToken);
     }
 
     private void OnControlMessage(string msg)
@@ -95,14 +108,36 @@ public sealed class NegotiationManager : IVideoSessionController
                 string profile = GetProp(p, "profileLevelId");
                 string sprop = GetProp(p, "spropParameterSets");
                 var answer = new SessionAnswer(accepted, codec, profile, sprop);
-                ApplyAnswerAsync(answer).GetAwaiter().GetResult();
+                ApplyAnswer(answer);
             }
             else if (type == NegotiationTypes.Pli)
             {
+                _attachedEncoder?.RequestKeyFrame();
                 PliReceived?.Invoke();
             }
         }
-        catch { /* swallow malformed */ }
+        catch (Exception exception) when (exception is JsonException or FormatException or InvalidOperationException)
+        {
+            _logger.LogWarning(exception, "Rejected malformed video negotiation message.");
+        }
+    }
+
+    private void ApplyAnswer(SessionAnswer answer)
+    {
+        _remoteAnswer = answer;
+        AnswerReceived?.Invoke(answer);
+    }
+
+    private async Task SendKeyFrameRequestObservedAsync()
+    {
+        try
+        {
+            await RequestKeyFrameAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Video keyframe request failed.");
+        }
     }
 
     private static string GetProp(JsonElement parent, string name)

@@ -12,5 +12,9 @@ public enum SerializationProtocol : short
     /// <summary>
     /// JSON (System.Text.Json) serialization of the envelope.
     /// </summary>
-    JsonRaw = 1
+    JsonRaw = 1,
+    /// <summary>
+    /// Versioned, length-prefixed attribute serialization with explicit null markers.
+    /// </summary>
+    LengthPrefixed = 2
 }

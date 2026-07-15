@@ -10,13 +10,14 @@ namespace TripleG3.P2P.Core;
 public static class SerialBusFactory
 {
     /// <summary>
-    /// Creates a UDP serial bus configured with the built-in serializers (None / JsonRaw).
+    /// Creates a UDP serial bus configured with the built-in serializers.
     /// </summary>
     public static ISerialBus CreateUdp()
         => new UdpSerialBus(
         [
             new NoneMessageSerializer(),
-            new JsonRawMessageSerializer()
+            new JsonRawMessageSerializer(),
+            new LengthPrefixedMessageSerializer()
         ]);
 
     /// <summary>
@@ -26,7 +27,8 @@ public static class SerialBusFactory
         => new TcpSerialBus(
         [
             new NoneMessageSerializer(),
-            new JsonRawMessageSerializer()
+            new JsonRawMessageSerializer(),
+            new LengthPrefixedMessageSerializer()
         ]);
 
     /// <summary>

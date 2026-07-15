@@ -9,6 +9,11 @@ namespace TripleG3.P2P.Core;
 public sealed class ProtocolConfiguration
 {
     /// <summary>
+    /// Local address used for the listening socket.
+    /// </summary>
+    public IPAddress LocalAddress { get; init; } = IPAddress.Any;
+
+    /// <summary>
     /// Remote peer endpoint to which outbound messages are sent.
     /// </summary>
     public required IPEndPoint RemoteEndPoint { get; init; }
@@ -24,6 +29,16 @@ public sealed class ProtocolConfiguration
     /// Local UDP port to bind for inbound messages.
     /// </summary>
     public required int LocalPort { get; init; }
+
+    /// <summary>
+    /// Maximum accepted serialized payload size. Frames above this limit are rejected before allocation.
+    /// </summary>
+    public int MaxPayloadBytes { get; init; } = 10 * 1024 * 1024;
+
+    /// <summary>
+    /// Maximum simultaneous accepted TCP sessions. This setting is ignored by UDP.
+    /// </summary>
+    public int MaxInboundConnections { get; init; } = 64;
 
     /// <summary>
     /// Serialization protocol used for every message on this bus.

@@ -4,6 +4,8 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
 using TripleG3.P2P.Serialization;
@@ -11,86 +13,275 @@ using TripleG3.P2P.Serialization;
 namespace TripleG3.P2P.Udp;
 
 /// <summary>
-/// UDP implementation of <see cref="ISerialBus"/> providing fire-and-forget message transmission
-/// with attribute-driven dispatch and pluggable serialization protocols.
+/// UDP implementation of <see cref="ISerialBus"/> with strict frame validation and configurable fan-out.
 /// </summary>
-public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> serializers) : ISerialBus, IDisposable
+public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDisposable
 {
-    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers = serializers.ToDictionary(s => s.Protocol, s => s);
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
-    private sealed record SubscriptionEntry(Type Type, Delegate Handler);
-    private readonly ConcurrentDictionary<string, List<SubscriptionEntry>> _subscriptions = new(StringComparer.Ordinal);
+    private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
+    private readonly ILogger<UdpSerialBus> _logger;
+    private readonly ConcurrentDictionary<string, (Guid Id, Type Type, Delegate Handler)[]> _subscriptions = new(StringComparer.Ordinal);
+    private readonly object _lifecycleGate = new();
 
     private UdpClient? _udpClient;
     private CancellationTokenSource? _cts;
     private ProtocolConfiguration? _config;
+    private Task? _receiveTask;
+    private int _disposed;
 
-    /// <summary>
-    /// True if a UDP client is active and listening.
-    /// </summary>
-    public bool IsListening => _udpClient != null;
+    public UdpSerialBus(IEnumerable<IMessageSerializer> serializers)
+        : this(serializers, NullLogger<UdpSerialBus>.Instance)
+    {
+    }
 
-    /// <inheritdoc />
+    public UdpSerialBus(IEnumerable<IMessageSerializer> serializers, ILogger<UdpSerialBus> logger)
+    {
+        ArgumentNullException.ThrowIfNull(serializers);
+        ArgumentNullException.ThrowIfNull(logger);
+        _serializers = serializers.ToDictionary(serializer => serializer.Protocol, serializer => serializer);
+        _logger = logger;
+    }
+
+    public bool IsListening => Volatile.Read(ref _udpClient) is not null;
+
     public ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
     {
-        if (IsListening) return ValueTask.CompletedTask;
-        _config = config;
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _udpClient = new UdpClient(config.LocalPort);
-        _ = ReceiveLoopAsync(_cts.Token);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ArgumentNullException.ThrowIfNull(config);
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateConfiguration(config);
+
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_udpClient is not null) return ValueTask.CompletedTask;
+
+            _config = config;
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _udpClient = new UdpClient(new IPEndPoint(config.LocalAddress, config.LocalPort));
+            _receiveTask = ReceiveLoopAsync(_udpClient, _cts.Token);
+        }
+
         return ValueTask.CompletedTask;
     }
 
-    private async Task ReceiveLoopAsync(CancellationToken token)
+    public void SubscribeTo<T>(Action<T> handler) => _ = Subscribe(handler);
+
+    public IDisposable Subscribe<T>(Action<T> handler)
     {
-        if (_udpClient is null) return;
-        while (!token.IsCancellationRequested)
+        ArgumentNullException.ThrowIfNull(handler);
+        var protocolName = GetProtocolTypeName(typeof(T));
+        var id = Guid.NewGuid();
+        var entry = (Id: id, Type: typeof(T), Handler: (Delegate)handler);
+        _subscriptions.AddOrUpdate(protocolName, [entry], (_, current) => [.. current, entry]);
+
+        return new SubscriptionRegistration(() =>
+            _subscriptions.AddOrUpdate(
+                protocolName,
+                [],
+                (_, current) => [.. current.Where(item => item.Id != id)]));
+    }
+
+    public async ValueTask SendAsync<T>(
+        T message,
+        MessageType messageType = MessageType.Data,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        var client = Volatile.Read(ref _udpClient) ?? throw new InvalidOperationException("Not listening. Call StartListeningAsync first.");
+        var config = _config ?? throw new InvalidOperationException("Configuration not set.");
+        if (!_serializers.TryGetValue(config.SerializationProtocol, out var serializer))
+        {
+            throw new InvalidOperationException($"Serializer {config.SerializationProtocol} is not registered.");
+        }
+
+        if (!Enum.IsDefined(messageType))
+        {
+            throw new ArgumentOutOfRangeException(nameof(messageType));
+        }
+
+        var typeName = GetProtocolTypeName(typeof(T));
+        var body = serializer.Serialize(new Envelope<T>(typeName, message));
+        if (body.Length > config.MaxPayloadBytes)
+        {
+            throw new InvalidDataException($"Serialized payload exceeds the {config.MaxPayloadBytes}-byte configured limit.");
+        }
+
+        var frame = new byte[UdpHeader.Size + body.Length];
+        new UdpHeader(body.Length, (short)messageType, config.SerializationProtocol).Write(frame);
+        body.CopyTo(frame.AsSpan(UdpHeader.Size));
+
+        var endpoints = new[] { config.RemoteEndPoint }
+            .Concat(config.BroadcastEndPoints)
+            .DistinctBy(endpoint => endpoint.ToString(), StringComparer.Ordinal)
+            .ToArray();
+        var failures = new List<Exception>();
+        var successCount = 0;
+
+        foreach (var endpoint in endpoints)
         {
             try
             {
-                var result = await _udpClient.ReceiveAsync(token);
-                ProcessIncoming(result.Buffer);
+                await client.SendAsync(frame.AsMemory(), endpoint, cancellationToken).ConfigureAwait(false);
+                successCount++;
             }
             catch (OperationCanceledException)
             {
+                throw;
+            }
+            catch (Exception exception) when (exception is SocketException or ObjectDisposedException or IOException)
+            {
+                failures.Add(exception);
+                _logger.LogWarning(exception, "UDP send to {RemoteEndPoint} failed.", endpoint);
+            }
+        }
+
+        if (successCount == 0)
+        {
+            throw new AggregateException("UDP send failed for every configured endpoint.", failures);
+        }
+
+        if (failures.Count > 0)
+        {
+            _logger.LogWarning(
+                "UDP broadcast completed partially: {Succeeded} of {Attempted} endpoints succeeded.",
+                successCount,
+                endpoints.Length);
+        }
+    }
+
+    public async ValueTask CloseConnectionAsync()
+    {
+        UdpClient? client;
+        CancellationTokenSource? cts;
+        Task? receiveTask;
+
+        lock (_lifecycleGate)
+        {
+            client = _udpClient;
+            cts = _cts;
+            receiveTask = _receiveTask;
+            _udpClient = null;
+            _cts = null;
+            _receiveTask = null;
+            _config = null;
+        }
+
+        if (client is null) return;
+        cts?.Cancel();
+        client.Dispose();
+        if (receiveTask is not null)
+        {
+            try
+            {
+                await receiveTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        cts?.Dispose();
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        UdpClient? client;
+        CancellationTokenSource? cts;
+        lock (_lifecycleGate)
+        {
+            client = _udpClient;
+            cts = _cts;
+            _udpClient = null;
+            _cts = null;
+            _receiveTask = null;
+            _config = null;
+        }
+
+        cts?.Cancel();
+        client?.Dispose();
+        cts?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        await CloseConnectionAsync().ConfigureAwait(false);
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task ReceiveLoopAsync(UdpClient client, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var result = await client.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                ProcessIncoming(result.Buffer);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
                 break;
             }
-            catch
+            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
             {
-                // Swallow to keep loop alive; replace with logging hook if desired.
+                break;
+            }
+            catch (Exception exception) when (exception is SocketException or InvalidDataException or JsonException or DecoderFallbackException)
+            {
+                _logger.LogWarning(exception, "UDP datagram was rejected.");
             }
         }
     }
 
     private void ProcessIncoming(byte[] buffer)
     {
-        if (buffer.Length < UdpHeader.Size) return;
-        var header = UdpHeader.Read(buffer);
-        var payload = buffer.AsSpan(UdpHeader.Size, header.Length);
-        if (!_serializers.TryGetValue(header.SerializationProtocol, out var serializer)) serializer = _serializers[SerializationProtocol.None];
+        if (buffer.Length < UdpHeader.Size)
+        {
+            _logger.LogWarning("Rejected UDP frame with a truncated header ({Length} bytes).", buffer.Length);
+            return;
+        }
 
+        var header = UdpHeader.Read(buffer);
+        var availablePayloadBytes = buffer.Length - UdpHeader.Size;
+        if (header.Length < 0 || header.Length != availablePayloadBytes || (_config is { } config && header.Length > config.MaxPayloadBytes))
+        {
+            _logger.LogWarning("Rejected UDP frame with invalid payload length {PayloadLength}; datagram contains {AvailableLength} bytes.", header.Length, availablePayloadBytes);
+            return;
+        }
+
+        if (!Enum.IsDefined((MessageType)header.MessageType))
+        {
+            _logger.LogWarning("Rejected UDP frame with unknown message type {MessageType}.", header.MessageType);
+            return;
+        }
+
+        if (!_serializers.TryGetValue(header.SerializationProtocol, out var serializer))
+        {
+            _logger.LogWarning("Rejected UDP frame with unknown serialization protocol {Protocol}.", (short)header.SerializationProtocol);
+            return;
+        }
+
+        var payload = buffer.AsSpan(UdpHeader.Size, header.Length);
         var protocolName = TryExtractTypeName(payload, header.SerializationProtocol);
-        if (string.IsNullOrEmpty(protocolName)) return;
-        if (!_subscriptions.TryGetValue(protocolName, out var entries)) return;
+        if (string.IsNullOrEmpty(protocolName) || !_subscriptions.TryGetValue(protocolName, out var entries)) return;
 
         foreach (var entry in entries)
         {
-            var envelopeType = typeof(Envelope<>).MakeGenericType(entry.Type);
-            object? envelopeObj = null;
             try
             {
-                envelopeObj = serializer.Deserialize(envelopeType, payload);
+                var envelopeType = typeof(Envelope<>).MakeGenericType(entry.Type);
+                var envelope = serializer.Deserialize(envelopeType, payload);
+                var message = envelopeType.GetProperty(nameof(Envelope<object>.Message))?.GetValue(envelope);
+                entry.Handler.DynamicInvoke(message);
             }
-            catch
+            catch (Exception exception)
             {
-                continue;
+                _logger.LogWarning(exception, "UDP subscriber for {MessageType} failed.", entry.Type);
             }
-            if (envelopeObj is null) continue;
-            var messageProp = envelopeType.GetProperty("Message");
-            if (messageProp is null) continue;
-            var messageValue = messageProp.GetValue(envelopeObj);
-            if (messageValue is null) continue;
-            try { entry.Handler.DynamicInvoke(messageValue); } catch { }
         }
     }
 
@@ -100,102 +291,46 @@ public sealed partial class UdpSerialBus(IEnumerable<IMessageSerializer> seriali
         {
             if (protocol == SerializationProtocol.None)
             {
-                var delimiter = Encoding.UTF8.GetBytes("@-@");
-                int idx = payload.IndexOf(delimiter);
-                if (idx < 0) return Encoding.UTF8.GetString(payload);
-                return Encoding.UTF8.GetString(payload[..idx]);
+                var delimiter = "@-@"u8;
+                var index = payload.IndexOf(delimiter);
+                return StrictUtf8.GetString(index < 0 ? payload : payload[..index]);
             }
-            else if (protocol == SerializationProtocol.JsonRaw)
+
+            if (protocol == SerializationProtocol.JsonRaw)
             {
-                using var doc = JsonDocument.Parse(payload.ToArray());
-                var root = doc.RootElement;
-                if (root.TryGetProperty("typeName", out var tn)) return tn.GetString();
-                if (root.TryGetProperty("TypeName", out var tn2)) return tn2.GetString();
+                using var document = JsonDocument.Parse(payload.ToArray());
+                var root = document.RootElement;
+                if (root.TryGetProperty("typeName", out var camelCase)) return camelCase.GetString();
+                if (root.TryGetProperty("TypeName", out var pascalCase)) return pascalCase.GetString();
+            }
+
+            if (protocol == SerializationProtocol.LengthPrefixed)
+            {
+                return LengthPrefixedMessageSerializer.TryExtractTypeName(payload);
             }
         }
-        catch
+        catch (Exception exception) when (exception is JsonException or DecoderFallbackException)
         {
         }
+
         return null;
     }
 
     private static string GetProtocolTypeName(Type type)
     {
-        var attr = type.GetCustomAttribute<UdpMessageAttribute>();
-        if (attr?.Name is { Length: > 0 } n) return n;
-        return type.Name;
+        var attribute = type.GetCustomAttribute<UdpMessageAttribute>();
+        return attribute?.Name is { Length: > 0 } name ? name : type.Name;
     }
 
-    /// <inheritdoc />
-    public void SubscribeTo<T>(Action<T> handler)
+    private void ValidateConfiguration(ProtocolConfiguration config)
     {
-        var protocolName = GetProtocolTypeName(typeof(T));
-        var list = _subscriptions.GetOrAdd(protocolName, _ => []);
-        list.Add(new SubscriptionEntry(typeof(T), handler));
-    }
-
-    /// <inheritdoc />
-    public async ValueTask SendAsync<T>(T message, MessageType messageType = MessageType.Data, CancellationToken cancellationToken = default)
-    {
-        if (_udpClient is null) throw new InvalidOperationException("Not listening. StartListeningAsync first.");
-        if (_config is null) throw new InvalidOperationException("Configuration not set.");
-        var protocol = _config.SerializationProtocol;
-        if (!_serializers.TryGetValue(protocol, out var serializer)) serializer = _serializers[SerializationProtocol.None];
-
-        var typeName = GetProtocolTypeName(typeof(T));
-        var envelope = new Envelope<T>(typeName, message);
-        byte[] body = serializer.Serialize(envelope);
-        var header = new UdpHeader(body.Length, (short)messageType, protocol);
-        var buffer = new byte[UdpHeader.Size + body.Length];
-        header.Write(buffer);
-        body.CopyTo(buffer.AsSpan(UdpHeader.Size));
-        // Build unique endpoint list: primary + broadcast extras
-        if (_config.RemoteEndPoint is null) throw new InvalidOperationException("RemoteEndPoint not configured.");
-        // De-duplicate using hash set of endpoint strings
-        var sentTo = new HashSet<string>(StringComparer.Ordinal);
-        async Task SendToAsync(IPEndPoint ep)
+        if (config.LocalPort is < 0 or > IPEndPoint.MaxPort) throw new ArgumentOutOfRangeException(nameof(config.LocalPort));
+        if (config.RemoteEndPoint.Port == 0) throw new ArgumentException("RemoteEndPoint must use a non-zero port.", nameof(config));
+        if (config.MaxPayloadBytes <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxPayloadBytes));
+        if (config.MaxInboundConnections <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxInboundConnections));
+        if (!_serializers.ContainsKey(config.SerializationProtocol))
         {
-            var key = ep.ToString();
-            if (!sentTo.Add(key)) return; // already scheduled
-            try
-            {
-                await _udpClient.SendAsync(buffer, buffer.Length, ep);
-            }
-            catch
-            {
-                // Swallow; consider logging hook
-            }
-        }
-
-        await SendToAsync(_config.RemoteEndPoint);
-        if (_config.BroadcastEndPoints.Count > 0)
-        {
-            // Send sequentially to maintain order; could be parallel if needed but no awaits inside loop aside from network
-            foreach (var ep in _config.BroadcastEndPoints)
-            {
-                await SendToAsync(ep);
-            }
+            throw new ArgumentException($"Serializer {config.SerializationProtocol} is not registered.", nameof(config));
         }
     }
-
-    /// <inheritdoc />
-    public async ValueTask CloseConnectionAsync()
-    {
-        try { _cts?.Cancel(); } catch { }
-        await Task.Yield();
-        _udpClient?.Dispose();
-        _udpClient = null;
-    }
-
-    /// <summary>
-    /// Disposes socket and cancels the receive loop.
-    /// </summary>
-    public void Dispose()
-    {
-        _udpClient?.Dispose();
-        _cts?.Cancel();
-        _cts?.Dispose();
-    }
-
-    private void ProcessEnvelope<T>(Envelope<T> envelope) { }
 }

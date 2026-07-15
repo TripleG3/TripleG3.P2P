@@ -1,180 +1,182 @@
 using System.Buffers;
-using TripleG3.P2P.Video.Security;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using PacketCipher = TripleG3.P2P.Video.Security.IVideoPayloadCipher;
+using RtpPacketMetadata = TripleG3.P2P.Video.Security.RtpPacketMetadata;
 
 namespace TripleG3.P2P.Video.Rtp;
 
-/// <summary>Reassembles H264 Annex B access units from RTP packets (single NAL + FU-A).</summary>
-public sealed class H264RtpDepacketizer(Video.Security.IVideoPayloadCipher cipher, ILogger<H264RtpDepacketizer>? log = null)
+/// <summary>Reassembles bounded H.264 Annex-B access units from RTP single-NAL and FU-A packets.</summary>
+public sealed class H264RtpDepacketizer
 {
-    private readonly Dictionary<uint, FrameAssembly> _frames = new(); // timestamp -> assembly
-    private readonly int _maxFrames = 32;
+    private const int DefaultMaximumFrames = 32;
+    private const int DefaultMaximumFrameBytes = 5 * 1024 * 1024;
+    private const int DefaultMaximumNalBytes = 2 * 1024 * 1024;
 
-    /// <summary>Process raw RTP datagram. If a complete frame is assembled returns true with AU.</summary>
-    public bool TryProcessPacket(ReadOnlySpan<byte> datagram, out EncodedAccessUnit au)
+    private readonly PacketCipher _cipher;
+    private readonly ILogger<H264RtpDepacketizer> _logger;
+    private readonly Dictionary<uint, H264FrameAssembly> _frames = [];
+    private readonly object _gate = new();
+    private readonly int _maximumFrames;
+    private readonly int _maximumFrameBytes;
+    private readonly int _maximumNalBytes;
+    private readonly TimeSpan _maximumAssemblyAge;
+
+    public H264RtpDepacketizer(PacketCipher cipher, ILogger<H264RtpDepacketizer>? logger = null)
+        : this(
+            cipher,
+            DefaultMaximumFrames,
+            DefaultMaximumFrameBytes,
+            DefaultMaximumNalBytes,
+            TimeSpan.FromMilliseconds(500),
+            logger)
     {
-        au = default;
-        try { log?.LogDebug("H264RtpDepacketizer.TryProcessPacket len={Len}", datagram.Length); } catch { }
-        if (!RtpPacket.TryParse(datagram, out var pkt)) return false;
-        var meta = new RtpPacketMetadata(pkt.Timestamp, pkt.SequenceNumber, pkt.Ssrc, pkt.Marker);
-        // Decrypt payload (in-place buffer)
-        Span<byte> tmp = stackalloc byte[Math.Min(pkt.Payload.Length, 2048)]; // for small; larger allocate
-        ReadOnlySpan<byte> payload = pkt.Payload.Length <= tmp.Length ? cipher.Decrypt(meta, pkt.Payload, tmp) : DecryptLarge(meta, pkt.Payload);
+    }
 
-        var assembly = GetOrCreateFrame(pkt.Timestamp);
-        if (!ProcessNalFragment(assembly, payload))
+    internal H264RtpDepacketizer(
+        PacketCipher cipher,
+        int maximumFrames,
+        int maximumFrameBytes,
+        int maximumNalBytes,
+        TimeSpan maximumAssemblyAge,
+        ILogger<H264RtpDepacketizer>? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(cipher);
+        if (maximumFrames <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFrames));
+        if (maximumFrameBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFrameBytes));
+        if (maximumNalBytes <= 0 || maximumNalBytes > maximumFrameBytes) throw new ArgumentOutOfRangeException(nameof(maximumNalBytes));
+        if (maximumAssemblyAge <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(maximumAssemblyAge));
+        _cipher = cipher;
+        _maximumFrames = maximumFrames;
+        _maximumFrameBytes = maximumFrameBytes;
+        _maximumNalBytes = maximumNalBytes;
+        _maximumAssemblyAge = maximumAssemblyAge;
+        _logger = logger ?? NullLogger<H264RtpDepacketizer>.Instance;
+    }
+
+    public bool TryProcessPacket(ReadOnlySpan<byte> datagram, out EncodedAccessUnit accessUnit)
+    {
+        lock (_gate)
         {
-            assembly.Invalid = true;
+            return TryProcessPacketCore(datagram, out accessUnit);
         }
-        if (pkt.Marker)
+    }
+
+    internal void Reset()
+    {
+        lock (_gate)
         {
-            // finalize
-            if (!assembly.Invalid && assembly.Nals.Count > 0)
+            foreach (var frame in _frames.Values) frame.ReleaseAll();
+            _frames.Clear();
+        }
+    }
+
+    private bool TryProcessPacketCore(ReadOnlySpan<byte> datagram, out EncodedAccessUnit accessUnit)
+    {
+        accessUnit = default;
+        EvictExpiredFrames();
+        if (!RtpPacket.TryParse(datagram, out var packet) || packet.Payload.IsEmpty) return false;
+
+        byte[]? rentedDecryptionBuffer = null;
+        Span<byte> decryptionBuffer = packet.Payload.Length <= 2048
+            ? stackalloc byte[packet.Payload.Length]
+            : (rentedDecryptionBuffer = ArrayPool<byte>.Shared.Rent(packet.Payload.Length)).AsSpan(0, packet.Payload.Length);
+        try
+        {
+            var metadata = new RtpPacketMetadata(packet.Timestamp, packet.SequenceNumber, packet.Ssrc, packet.Marker);
+            var payload = _cipher.Decrypt(metadata, packet.Payload, decryptionBuffer);
+            if (payload.Length > decryptionBuffer.Length) return false;
+
+            var frame = GetOrCreateFrame(packet.Timestamp);
+            if (!frame.AcceptSequence(packet.SequenceNumber)) frame.Invalid = true;
+            if (!ProcessNalFragment(frame, payload)) frame.Invalid = true;
+            if (!packet.Marker) return false;
+
+            _frames.Remove(packet.Timestamp);
+            try
             {
-                var total = 0; foreach (var n in assembly.Nals) total += n.Length + 4; // start code
-                var frame = new ArrayPoolFrame(total);
-                var buffer = frame.Memory.Span;
-                int offset = 0;
-                foreach (var nal in assembly.Nals)
-                {
-                    buffer[offset++] = 0; buffer[offset++] = 0; buffer[offset++] = 0; buffer[offset++] = 1;
-                    nal.Span.CopyTo(buffer.Slice(offset, nal.Length));
-                    offset += nal.Length;
-                }
-                bool isKey = assembly.IsKeyFrame;
-                au = new EncodedAccessUnit(frame, total, isKey, pkt.Timestamp, 0);
-                // release intermediate NAL buffers now that consolidated frame allocated
-                assembly.ReleaseAll();
-                _frames.Remove(pkt.Timestamp);
-                TrimIfNeeded();
+                if (frame.Invalid || frame.HasCurrentFu || frame.NalCount == 0) return false;
+                var pooledFrame = new ArrayPoolFrame(frame.AnnexBLength);
+                frame.CopyAnnexBTo(pooledFrame.Memory.Span);
+                accessUnit = new EncodedAccessUnit(
+                    pooledFrame,
+                    frame.AnnexBLength,
+                    frame.IsKeyFrame,
+                    packet.Timestamp,
+                    0);
                 return true;
             }
-            _frames.Remove(pkt.Timestamp); // drop invalid/incomplete
-            TrimIfNeeded();
-        }
-        return false;
-    }
-
-    private ReadOnlySpan<byte> DecryptLarge(RtpPacketMetadata meta, ReadOnlySpan<byte> payload)
-    {
-        // Large payloads: allocate a dedicated buffer; copies avoided elsewhere dominate anyway.
-        var arr = new byte[payload.Length];
-        var span = arr.AsSpan();
-        cipher.Decrypt(meta, payload, span);
-        return span;
-    }
-
-    private FrameAssembly GetOrCreateFrame(uint ts)
-    {
-        if (!_frames.TryGetValue(ts, out var fa)) { fa = new FrameAssembly(); _frames[ts] = fa; }
-        return fa;
-    }
-
-    private bool ProcessNalFragment(FrameAssembly frame, ReadOnlySpan<byte> payload)
-    {
-        if (payload.Length == 0) return false;
-        byte nalHeader = payload[0];
-        byte nalType = (byte)(nalHeader & 0x1F);
-        if (nalType == 28) // FU-A
-        {
-            if (payload.Length < 2) return false;
-            byte fuHeader = payload[1];
-            bool start = (fuHeader & 0x80) != 0;
-            bool end = (fuHeader & 0x40) != 0;
-            byte origType = (byte)(fuHeader & 0x1F);
-            byte nri = (byte)(nalHeader & 0x60);
-            byte forbidden = (byte)(nalHeader & 0x80);
-            if (start)
+            finally
             {
-                // Rent/allocate buffer for this FU assembly; we pessimistically size to MTU-ish growth via pooled list of segments.
-                frame.StartNewFu((byte)(forbidden | nri | origType));
+                frame.ReleaseAll();
             }
-            if (!frame.HasCurrentFu) return false; // missing start
-            frame.AppendFuPayload(payload.Slice(2));
-            if (end)
-            {
-                var nalSlice = frame.CompleteFu(out bool isIdr, origType);
-                frame.Nals.Add(nalSlice);
-                if (isIdr) frame.IsKeyFrame = true;
-            }
-            return true;
         }
-        else
+        catch (Exception exception) when (exception is InvalidDataException or ArgumentException)
         {
-            // Single NAL unit: copy once into pooled frame's final buffer later; here we just store an owned copy.
-            var arr = ArrayPool<byte>.Shared.Rent(payload.Length);
-            payload.CopyTo(arr);
-            frame.Nals.Add(arr.AsMemory(0,payload.Length));
-            frame.RentedBuffers.Add(arr);
-            if (IsIdr(nalType)) frame.IsKeyFrame = true;
-            return true;
+            _logger.LogWarning(exception, "Rejected malformed or undecryptable H.264 RTP packet.");
+            return false;
+        }
+        finally
+        {
+            if (rentedDecryptionBuffer is not null) ArrayPool<byte>.Shared.Return(rentedDecryptionBuffer);
         }
     }
 
-    private static bool IsIdr(byte type) => type == 5; // simplistic
-
-    private void TrimIfNeeded()
+    private H264FrameAssembly GetOrCreateFrame(uint timestamp)
     {
-        if (_frames.Count <= _maxFrames) return;
-        // remove oldest
-        var oldestTs = _frames.Keys.Min();
-        _frames.Remove(oldestTs);
+        if (_frames.TryGetValue(timestamp, out var existing)) return existing;
+        while (_frames.Count >= _maximumFrames) EvictOldestFrame();
+        var frame = new H264FrameAssembly();
+        _frames.Add(timestamp, frame);
+        return frame;
     }
 
-    private sealed class FrameAssembly
+    private bool ProcessNalFragment(H264FrameAssembly frame, ReadOnlySpan<byte> payload)
     {
-        public List<ReadOnlyMemory<byte>> Nals { get; } = new();
-        public List<byte[]> RentedBuffers { get; } = new(); // for single NAL copies
-        private byte[]? _fuBuffer; // current FU reassembly buffer
-        private int _fuLength;
-        public bool Invalid { get; set; }
-        public bool IsKeyFrame { get; set; }
-        public bool HasCurrentFu => _fuBuffer != null;
-
-        public void StartNewFu(byte reconstructedHeader)
+        if (payload.IsEmpty || frame.Invalid) return false;
+        var nalHeader = payload[0];
+        var nalType = (byte)(nalHeader & 0x1F);
+        if (nalType != 28)
         {
-            if (_fuBuffer != null) { ArrayPool<byte>.Shared.Return(_fuBuffer); _fuBuffer = null; }
-            _fuBuffer = ArrayPool<byte>.Shared.Rent(2048); // initial size; will grow if needed
-            _fuBuffer[0] = reconstructedHeader;
-            _fuLength = 1;
+            return frame.AddSingleNal(payload, _maximumNalBytes, _maximumFrameBytes);
         }
 
-        public void AppendFuPayload(ReadOnlySpan<byte> fragment)
+        if (payload.Length < 2) return false;
+        var fuHeader = payload[1];
+        var start = (fuHeader & 0x80) != 0;
+        var end = (fuHeader & 0x40) != 0;
+        var originalType = (byte)(fuHeader & 0x1F);
+        if (start)
         {
-            if (_fuBuffer == null) return;
-            EnsureCapacity(_fuLength + fragment.Length);
-            fragment.CopyTo(_fuBuffer.AsSpan(_fuLength));
-            _fuLength += fragment.Length;
+            var reconstructedHeader = (byte)((nalHeader & 0xE0) | originalType);
+            if (!frame.StartFu(reconstructedHeader, _maximumNalBytes, _maximumFrameBytes)) return false;
+        }
+        else if (!frame.HasCurrentFu)
+        {
+            return false;
         }
 
-        private void EnsureCapacity(int needed)
-        {
-            if (_fuBuffer == null) return;
-            if (needed <= _fuBuffer.Length) return;
-            var newSize = _fuBuffer.Length * 2;
-            while (newSize < needed) newSize *= 2;
-            var newBuf = ArrayPool<byte>.Shared.Rent(newSize);
-            _fuBuffer.AsSpan(0,_fuLength).CopyTo(newBuf);
-            ArrayPool<byte>.Shared.Return(_fuBuffer);
-            _fuBuffer = newBuf;
-        }
+        if (!frame.AppendFuPayload(payload[2..], _maximumNalBytes, _maximumFrameBytes)) return false;
+        return !end || frame.CompleteFu(originalType);
+    }
 
-        public ReadOnlyMemory<byte> CompleteFu(out bool isIdr, byte origType)
+    private void EvictExpiredFrames()
+    {
+        var now = Stopwatch.GetTimestamp();
+        foreach (var item in _frames
+                     .Where(item => Stopwatch.GetElapsedTime(item.Value.CreatedTimestamp, now) > _maximumAssemblyAge)
+                     .ToArray())
         {
-            isIdr = origType == 5;
-            var buf = _fuBuffer!;
-            var mem = buf.AsMemory(0,_fuLength);
-            RentedBuffers.Add(buf); // track for return after frame finalization
-            _fuBuffer = null; _fuLength = 0;
-            return mem;
+            item.Value.ReleaseAll();
+            _frames.Remove(item.Key);
         }
+    }
 
-        public void ReleaseAll()
-        {
-            foreach (var b in RentedBuffers) ArrayPool<byte>.Shared.Return(b);
-            RentedBuffers.Clear();
-            if (_fuBuffer != null) { ArrayPool<byte>.Shared.Return(_fuBuffer); _fuBuffer = null; }
-            _fuLength = 0;
-        }
+    private void EvictOldestFrame()
+    {
+        var oldest = _frames.MinBy(item => item.Value.CreatedTimestamp);
+        oldest.Value.ReleaseAll();
+        _frames.Remove(oldest.Key);
     }
 }

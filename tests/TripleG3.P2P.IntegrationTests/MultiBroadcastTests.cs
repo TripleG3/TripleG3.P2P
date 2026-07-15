@@ -12,6 +12,7 @@ public class MultiBroadcastTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Broadcast_Message_Reaches_All_Peers(SerializationProtocol proto)
     {
         // Arrange three peers (A sends to B + C). Unique ports chosen from dynamic base.
@@ -72,6 +73,7 @@ public class MultiBroadcastTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Each_Peer_Can_Send_Back_To_Sender(SerializationProtocol proto)
     {
         // Arrange star topology: central hub (H) listens; two spokes (S1,S2) broadcast to hub only; hub broadcasts to both.
@@ -162,6 +164,7 @@ public class MultiBroadcastTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Broadcast_With_Duplicate_Endpoints_Does_Not_Double_Send(SerializationProtocol proto)
     {
         var basePort = GetEphemeralBasePort();
@@ -232,6 +235,7 @@ public class MultiBroadcastTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Concurrent_Broadcasts_All_Messages_Delivered_Exactly_Once(SerializationProtocol proto)
     {
         // 4 peers each broadcasting to the other 3
@@ -302,6 +306,7 @@ public class MultiBroadcastTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Mixed_Message_Types_Broadcast_Correctly(SerializationProtocol proto)
     {
         var basePort = GetEphemeralBasePort();

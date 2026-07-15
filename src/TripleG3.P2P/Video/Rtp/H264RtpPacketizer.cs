@@ -1,124 +1,102 @@
-using System.Buffers;
-using TripleG3.P2P.Video.Security;
+using PacketCipher = TripleG3.P2P.Video.Security.IVideoPayloadCipher;
+using RtpPacketMetadata = TripleG3.P2P.Video.Security.RtpPacketMetadata;
 
 namespace TripleG3.P2P.Video.Rtp;
 
-/// <summary>Converts H264 Annex B access units into RTP packets (RFC 6184, single NAL & FU-A only).</summary>
-public sealed class H264RtpPacketizer(uint ssrc, int mtu, Video.Security.IVideoPayloadCipher cipher)
+/// <summary>Converts H.264 Annex-B access units into RTP single-NAL or FU-A packets.</summary>
+public sealed class H264RtpPacketizer
 {
-    private readonly RtpSequenceNumberGenerator _seq = new();
-    private const byte PayloadType = 96; // dynamic
+    private readonly uint _ssrc;
+    private readonly int _mtu;
+    private readonly byte _payloadType;
+    private readonly PacketCipher _cipher;
+    private readonly RtpSequenceNumberGenerator _sequenceNumbers = new();
 
-    public IEnumerable<ReadOnlyMemory<byte>> Packetize(EncodedAccessUnit au)
+    public H264RtpPacketizer(uint ssrc, int mtu, PacketCipher cipher)
+        : this(ssrc, mtu, 96, cipher)
     {
-        // Enumerate NAL units as slices referencing the original Annex B buffer (no per-NAL allocation)
-        var nalUnits = AnnexBHelper.EnumerateNalUnits(au.AnnexB);
-        int total = nalUnits.Count;
-        // Materialize each NAL slice to an array once (still fewer allocations than previous per-fragment copies)
-        for (int i = 0; i < total; i++)
+    }
+
+    public H264RtpPacketizer(uint ssrc, int mtu, byte payloadType, PacketCipher cipher)
+    {
+        ArgumentNullException.ThrowIfNull(cipher);
+        if (payloadType > 127) throw new ArgumentOutOfRangeException(nameof(payloadType));
+        if (cipher.OverheadBytes < 0) throw new ArgumentOutOfRangeException(nameof(cipher), "Cipher overhead cannot be negative.");
+        if (mtu <= RtpPacket.HeaderLength + 2 + cipher.OverheadBytes)
         {
-            bool isLastNal = (i + 1) == total;
-            var slice = nalUnits[i];
-            var nalArray = slice.ToArray();
-        foreach (var packet in PacketizeNal(nalArray, isLastNal, au.Timestamp90k))
+            throw new ArgumentOutOfRangeException(nameof(mtu), "MTU is too small for an RTP FU-A packet and cipher overhead.");
+        }
+
+        _ssrc = ssrc;
+        _mtu = mtu;
+        _payloadType = payloadType;
+        _cipher = cipher;
+    }
+
+    public IEnumerable<ReadOnlyMemory<byte>> Packetize(EncodedAccessUnit accessUnit)
+    {
+        var nalUnits = AnnexBHelper.EnumerateNalUnits(accessUnit.AnnexB);
+        for (var index = 0; index < nalUnits.Count; index++)
+        {
+            var isLastNal = index == nalUnits.Count - 1;
+            foreach (var packet in PacketizeNal(nalUnits[index].ToArray(), isLastNal, accessUnit.RtpTimestamp90k))
+            {
                 yield return packet;
+            }
         }
     }
 
-    private IEnumerable<ReadOnlyMemory<byte>> PacketizeNal(byte[] nal, bool isLastNalOfAu, uint timestamp)
+    private IEnumerable<ReadOnlyMemory<byte>> PacketizeNal(byte[] nal, bool isLastNalOfAccessUnit, uint timestamp)
     {
-        // Single NAL if fits
-        int maxPayload = mtu - RtpPacket.HeaderLength;
-        if (nal.Length <= maxPayload)
+        if (nal.Length == 0) yield break;
+        var maximumPlaintextPayload = _mtu - RtpPacket.HeaderLength - _cipher.OverheadBytes;
+        if (nal.Length <= maximumPlaintextPayload)
         {
-            var rent = ArrayPool<byte>.Shared.Rent(RtpPacket.HeaderLength + nal.Length);
-            var span = rent.AsSpan();
-            var seq = _seq.Next();
-            RtpPacket.WriteHeader(span, marker: isLastNalOfAu, payloadType: PayloadType, seq, timestamp, ssrc);
-            var payloadDest = span.Slice(RtpPacket.HeaderLength, nal.Length);
-            new ReadOnlySpan<byte>(nal).CopyTo(payloadDest);
-            // Encrypt (output into same buffer)
-            var meta = new RtpPacketMetadata(timestamp, seq, ssrc, isLastNalOfAu);
-            cipher.Encrypt(meta, payloadDest, payloadDest);
-            yield return new Memory<byte>(rent, 0, RtpPacket.HeaderLength + nal.Length);
+            yield return BuildPacket(nal, isLastNalOfAccessUnit, timestamp);
             yield break;
         }
 
-        // FU-A fragmentation
-    byte nalHeader = nal[0];
-        byte forbidden = (byte)(nalHeader & 0x80);
-        byte nri = (byte)(nalHeader & 0x60);
-        byte type = (byte)(nalHeader & 0x1F);
-        int offset = 1; // skip original header already captured in FU header
-        int payloadRemaining = nal.Length - 1;
-        bool first = true;
-        while (payloadRemaining > 0)
+        var fragmentCapacity = maximumPlaintextPayload - 2;
+        var nalHeader = nal[0];
+        var offset = 1;
+        var remaining = nal.Length - 1;
+        var first = true;
+        while (remaining > 0)
         {
-            int fragmentPayload = Math.Min(maxPayload - 2, payloadRemaining); // 2 bytes FU-A headers
-            var rent = ArrayPool<byte>.Shared.Rent(RtpPacket.HeaderLength + 2 + fragmentPayload);
-            var span = rent.AsSpan();
-            bool lastFragment = payloadRemaining - fragmentPayload == 0;
-            bool marker = lastFragment && isLastNalOfAu;
-            var seq = _seq.Next();
-            RtpPacket.WriteHeader(span, marker, PayloadType, seq, timestamp, ssrc);
-            // FU indicator
-            span[RtpPacket.HeaderLength] = (byte)(forbidden | nri | 28); // FU-A type 28
-            // FU header
-            byte fuHeader = (byte)(type & 0x1F);
-            if (first) fuHeader |= 0x80; // S
-            if (lastFragment) fuHeader |= 0x40; // E
-            span[RtpPacket.HeaderLength + 1] = fuHeader;
-            var fragSpan = span.Slice(RtpPacket.HeaderLength + 2, fragmentPayload);
-            new ReadOnlySpan<byte>(nal, offset, fragmentPayload).CopyTo(fragSpan);
-            var meta = new RtpPacketMetadata(timestamp, seq, ssrc, marker);
-            cipher.Encrypt(meta, fragSpan, fragSpan);
-            yield return new Memory<byte>(rent, 0, RtpPacket.HeaderLength + 2 + fragmentPayload);
-            offset += fragmentPayload;
-            payloadRemaining -= fragmentPayload;
+            var fragmentLength = Math.Min(fragmentCapacity, remaining);
+            var last = fragmentLength == remaining;
+            var plaintextPayload = new byte[fragmentLength + 2];
+            plaintextPayload[0] = (byte)((nalHeader & 0xE0) | 28);
+            plaintextPayload[1] = (byte)(nalHeader & 0x1F);
+            if (first) plaintextPayload[1] |= 0x80;
+            if (last) plaintextPayload[1] |= 0x40;
+            Buffer.BlockCopy(nal, offset, plaintextPayload, 2, fragmentLength);
+
+            yield return BuildPacket(plaintextPayload, last && isLastNalOfAccessUnit, timestamp);
             first = false;
+            offset += fragmentLength;
+            remaining -= fragmentLength;
         }
     }
-}
 
-internal static class AnnexBHelper
-{
-    /// <summary>
-    /// Enumerate NAL units (without start codes) as ReadOnlyMemory slices referencing the original buffer.
-    /// No allocations are performed for the NAL payloads themselves.
-    /// </summary>
-    public static List<ReadOnlyMemory<byte>> EnumerateNalUnits(ReadOnlyMemory<byte> memory)
+    private ReadOnlyMemory<byte> BuildPacket(byte[] plaintextPayload, bool marker, uint timestamp)
     {
-        var span = memory.Span;
-        var list = new List<ReadOnlyMemory<byte>>();
-        int i = 0; int start = -1;
-        while (i < span.Length)
+        var sequenceNumber = _sequenceNumbers.Next();
+        var packet = new byte[RtpPacket.HeaderLength + plaintextPayload.Length + _cipher.OverheadBytes];
+        RtpPacket.WriteHeader(packet, marker, _payloadType, sequenceNumber, timestamp, _ssrc);
+        var output = packet.AsSpan(RtpPacket.HeaderLength);
+        var metadata = new RtpPacketMetadata(timestamp, sequenceNumber, _ssrc, marker);
+        var encrypted = _cipher.Encrypt(metadata, plaintextPayload, output);
+        if (encrypted.Length > output.Length)
         {
-            if (IsStartCode(span, i, out int scLen))
-            {
-                if (start != -1)
-                {
-                    int len = i - start;
-                    list.Add(memory.Slice(start, len));
-                }
-                i += scLen; start = i; continue;
-            }
-            i++;
+            throw new InvalidDataException("Cipher returned more bytes than the packet output buffer can hold.");
         }
-        if (start != -1 && start < span.Length)
-        {
-            int len = span.Length - start;
-            list.Add(memory.Slice(start, len));
-        }
-        return list;
-    }
 
-    private static bool IsStartCode(ReadOnlySpan<byte> data, int index, out int length)
-    {
-        length = 0;
-        if (index + 3 < data.Length && data[index] == 0 && data[index+1]==0 && data[index+2]==1)
-        { length = 3; return true; }
-        if (index + 4 < data.Length && data[index]==0 && data[index+1]==0 && data[index+2]==0 && data[index+3]==1)
-        { length = 4; return true; }
-        return false;
+        if (!encrypted.Overlaps(output, out var offset) || offset != 0)
+        {
+            encrypted.CopyTo(output);
+        }
+
+        return packet.AsMemory(0, RtpPacket.HeaderLength + encrypted.Length);
     }
 }

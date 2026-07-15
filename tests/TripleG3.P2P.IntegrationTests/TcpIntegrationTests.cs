@@ -13,6 +13,7 @@ public class TcpIntegrationTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Tcp_Basic_Send_And_Receive(SerializationProtocol proto)
     {
         var basePort = PortAllocator.NextBlock();
@@ -48,8 +49,8 @@ public class TcpIntegrationTests
                 return receivedA.Any(c => c.Text == msg2.Text) && receivedB.Any(c => c.Text == msg1.Text);
         });
 
-        lock(receivedA) Assert.Contains(receivedA, c => c == msg2);
-        lock(receivedB) Assert.Contains(receivedB, c => c == msg1);
+        lock(receivedA) Assert.Single(receivedA, c => c == msg2);
+        lock(receivedB) Assert.Single(receivedB, c => c == msg1);
 
         await a.CloseConnectionAsync();
         await b.CloseConnectionAsync();
@@ -58,6 +59,7 @@ public class TcpIntegrationTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Tcp_Broadcast_FanOut(SerializationProtocol proto)
     {
         var basePort = PortAllocator.NextBlock();
@@ -107,6 +109,7 @@ public class TcpIntegrationTests
     [Theory]
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
+    [InlineData(SerializationProtocol.LengthPrefixed)]
     public async Task Tcp_Ordering_Preserved_Per_Peer(SerializationProtocol proto)
     {
         var basePort = PortAllocator.NextBlock();

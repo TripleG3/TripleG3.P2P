@@ -12,6 +12,7 @@ jobs:
     runs-on: windows-latest
     env:
       PROJECT_PATH: src/TripleG3.P2P/TripleG3.P2P.csproj
+      SOLUTION_PATH: TripleG3.P2P.slnx
       NUGET_SOURCE: https://api.nuget.org/v3/index.json
     defaults:
       run:
@@ -26,10 +27,10 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore $PROJECT_PATH
+        run: dotnet restore $SOLUTION_PATH
 
       - name: Compute Version (no file modification)
         id: version
@@ -48,10 +49,40 @@ jobs:
           "version=$newVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build (Release)
-        run: dotnet build $PROJECT_PATH -c Release -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
+        run: dotnet build $SOLUTION_PATH -c Release -warnaserror -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
+
+      - name: Test (Release)
+        run: dotnet test $SOLUTION_PATH -c Release --no-build --no-restore -p:Version=${{ steps.version.outputs.version }} --logger "trx;LogFilePrefix=release" --results-directory TestResults
 
       - name: Pack
         run: dotnet pack $PROJECT_PATH -c Release --no-build -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} -o ./artifacts
+
+      - name: Validate package
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $package = Get-ChildItem artifacts -Filter *.nupkg | Select-Object -First 1
+          if (-not $package) { throw 'No NuGet package was produced.' }
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
+          try {
+            $entry = $archive.Entries | Where-Object FullName -Like '*.nuspec' | Select-Object -First 1
+            if (-not $entry) { throw 'Package does not contain a nuspec.' }
+            $reader = [System.IO.StreamReader]::new($entry.Open())
+            try { $manifest = [xml]$reader.ReadToEnd() } finally { $reader.Dispose() }
+            if ($manifest.package.metadata.license.'#text' -ne 'GPL-3.0-only') { throw 'Unexpected package license.' }
+            foreach ($required in @('README.md', 'LICENSE', 'lib/net10.0/TripleG3.P2P.dll')) {
+              if (-not ($archive.Entries.FullName -contains $required)) { throw "Package is missing $required." }
+            }
+          }
+          finally { $archive.Dispose() }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results
+          path: TestResults/*.trx
+
       - name: Push to NuGet.org
         if: success() && env.NUGET_SOURCE == 'https://api.nuget.org/v3/index.json'
         env:

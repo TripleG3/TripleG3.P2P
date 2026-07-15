@@ -26,12 +26,28 @@ public ref struct RtpPacket
         int cc = v & 0x0F;
         int headerLen = HeaderLength + cc * 4;
         if (buffer.Length < headerLen) return false;
+        if ((v & 0x10) != 0)
+        {
+            if (buffer.Length < headerLen + 4) return false;
+            var extensionWords = BinaryPrimitives.ReadUInt16BigEndian(buffer.Slice(headerLen + 2, 2));
+            headerLen += 4 + extensionWords * 4;
+            if (buffer.Length < headerLen) return false;
+        }
+
+        var payloadEnd = buffer.Length;
+        if ((v & 0x20) != 0)
+        {
+            var paddingLength = buffer[^1];
+            if (paddingLength == 0 || paddingLength > payloadEnd - headerLen) return false;
+            payloadEnd -= paddingLength;
+        }
+
         packet.VersionPaddingExtensionCsrc = v;
         packet.MarkerPayloadType = buffer[1];
         packet.SequenceNumber = BinaryPrimitives.ReadUInt16BigEndian(buffer.Slice(2,2));
         packet.Timestamp = BinaryPrimitives.ReadUInt32BigEndian(buffer.Slice(4,4));
         packet.Ssrc = BinaryPrimitives.ReadUInt32BigEndian(buffer.Slice(8,4));
-        packet.Payload = buffer.Slice(headerLen);
+        packet.Payload = buffer.Slice(headerLen, payloadEnd - headerLen);
         return true;
     }
 

@@ -11,8 +11,9 @@
 		<Authors>Michael Puckett, II</Authors>
 		<Company>TripleG3</Company>
 		<Product>TripleG3.P2P</Product>
-		<Description>Peer-to-peer UDP messaging abstraction for .NET 9 apps (consumable from MAUI) with attribute-based high-performance serialization.</Description>
+		<Description>Peer-to-peer UDP and TCP messaging for .NET 10 apps with attribute-based serialization and experimental RTP video support.</Description>
 		<PackageTags>MAUI;UDP;TCP;FTP;Networking;Serialization;P2P</PackageTags>
+		<PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
 		<RepositoryUrl>https://github.com/TripleG3/TripleG3.P2P</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageProjectUrl>https://github.com/TripleG3/TripleG3.P2P</PackageProjectUrl>
@@ -28,8 +29,8 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.9" />
-		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
 	</ItemGroup>
 
 	<ItemGroup>

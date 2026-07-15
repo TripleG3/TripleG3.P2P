@@ -1,8 +1,8 @@
 # TripleG3.P2P
 
-High-performance, attribute-driven peer-to-peer messaging for .NET 9 / MAUI apps over UDP (extensible to future TCP / other transports). Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8‑byte header + pluggable serialization strategy.
+High-performance, attribute-driven peer-to-peer messaging for .NET 10 / MAUI apps over UDP and TCP. Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8-byte header and pluggable serialization strategy.
 
-> Status: UDP transport + two serializers (Delimited / `None` and `JsonRaw`) implemented. Designed so additional transports (TCP, etc.) and serializers can slot in without breaking user code.
+> Status: UDP and TCP transports plus three serializers (`None`, `JsonRaw`, and `LengthPrefixed`) are implemented. RTP/H.264 video remains experimental.
 
 ---
 
@@ -22,11 +22,11 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 
 ## Features At A Glance
 
-- Target framework: `net9.0` (single TFM here; platform heads handled by MAUI host project)
+- Target framework: `net10.0` (single TFM here; platform heads handled by MAUI host project)
 - 8‑byte header layout (Length / MessageType / SerializationProtocol)
 - Attribute ordered property serialization with stable delimiter `@-@`
 - Automatic Envelope wrapping so handlers receive strong types directly
-- Multiple simultaneous protocol instances (Delimited + JSON) via separate buses
+- Multiple simultaneous protocol instances via separate buses
 - Multi-endpoint broadcast (one `SendAsync` -> N peers)
 - Plug-in serializer model (`IMessageSerializer`)
 - Graceful cancellation / disposal
@@ -36,10 +36,10 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 ### Transport Summary
 
 | Transport | Reliability | Ordering | Broadcast Fan-Out | Status |
-|-----------|-------------|----------|-------------------|--------|
-| UDP       | Best effort / loss possible | Not guaranteed across datagrams | Yes (multi-endpoint send) | Implemented |
-| TCP       | Reliable | Preserved per connection | Yes (writes to each stream) | Implemented |
-| FTP       | N/A (file transfer layer) | N/A | Planned (large payload offload) | Planned |
+| --- | --- | --- | --- | --- |
+| UDP | Best effort / loss possible | Not guaranteed across datagrams | Yes (multi-endpoint send) | Implemented |
+| TCP | Reliable | Preserved per connection | Yes (writes to each stream) | Implemented |
+| FTP | N/A (file transfer layer) | N/A | Planned (large payload offload) | Planned |
 
 Use UDP when you need lowest overhead and can tolerate loss; use TCP when you need reliability / ordering without building it yourself.
 
@@ -64,7 +64,7 @@ CI rewrites the patch component using the GitHub Actions run number. Base `<Vers
 ## Target Framework
 
 ```text
-net9.0
+net10.0
 ```
 
 MAUI/platform variants are produced in a sibling project; this core library stays lean.
@@ -84,15 +84,21 @@ public interface ISerialBus {
     ValueTask SendAsync<T>(T message, MessageType messageType = MessageType.Data, CancellationToken ct = default);
 }
 ```
+
 Abstracts the transport (currently UDP + TCP; FTP planned). Your code remains identical besides construction via the factory.
+
+Both built-in buses also implement `ISubscriptionSerialBus`, whose `Subscribe<T>` method returns an `IDisposable` unsubscription registration.
 
 ### ProtocolConfiguration
 
 ```csharp
 public sealed class ProtocolConfiguration {
+    IPAddress LocalAddress { get; init; }
     IPEndPoint RemoteEndPoint { get; init; }
     IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; }
     int        LocalPort      { get; init; }
+    int        MaxPayloadBytes { get; init; }
+    int        MaxInboundConnections { get; init; }
     SerializationProtocol SerializationProtocol { get; init; }
 }
 ```
@@ -174,7 +180,7 @@ Reliability Disclaimer: UDP does not guarantee delivery / ordering. The library 
 Register UDP components:
 
 ```csharp
-services.AddP2PUdp(); // Registers None + JsonRaw serializers and UDP bus
+services.AddP2PUdp(); // Registers None + JsonRaw + LengthPrefixed serializers and UDP bus
 var bus = services.BuildServiceProvider().GetRequiredService<ISerialBus>();
 ```
 
@@ -189,21 +195,27 @@ Internal transport wrapper: `TypeName` + `Message`. The receiver inspects `TypeN
 ```text
 None    // Attribute-delimited (fast, compact)
 JsonRaw // System.Text.Json UTF-8 payload
+LengthPrefixed // Versioned attribute contract with lengths and explicit null markers
 ```
+
 Add more by implementing `IMessageSerializer`.
+
+Use `LengthPrefixed` for new attribute-based contracts. `None` remains available for wire compatibility, but delimiter text inside values, null versus empty strings, and some nested shapes are inherently ambiguous.
 
 ### Attributes
 
 - `[UdpMessage]` or `[UdpMessage("CustomName")]` gives the logical protocol name (stable across assemblies)
 - `[UdpMessage<T>]` generic variant uses `typeof(T).Name` (or supplied override) for convenience
-- `[Udp(order)]` marks & orders properties participating in delimiter serialization
-    - Unannotated properties are ignored by the `None` serializer
+- `[Udp(order)]` marks and orders properties participating in attribute serialization.
+- Unannotated properties are ignored by `None` and `LengthPrefixed`.
+- Constructor parameters are matched to annotated properties by name and type.
 
 ### MessageType
 
 Currently: `Data` (extensible placeholder for control, ack, etc.)
 
 ---
+
 ## Wire Format (UDP)
 
 Header (8 bytes total):
@@ -216,10 +228,11 @@ Payload:
 
 - If `SerializationProtocol.None`: `TypeName` + optional `@-@` + serialized property segments (each delimited by `@-@`)
 - If `JsonRaw`: UTF-8 JSON of the `Envelope<T>`
+- If `LengthPrefixed`: format version + length-prefixed UTF-8 type name + recursively framed ordered properties
 
 ---
-## Quick Start
 
+## Quick Start
 
 ```csharp
 using TripleG3.P2P.Attributes;
@@ -281,8 +294,8 @@ await tcp.SendAsync(new Chat("me","reliable"));
 ```
 
 ---
-## Using JSON Instead
 
+## Using JSON Instead
 
 ```csharp
 var jsonBus = SerialBusFactory.CreateUdp();
@@ -296,8 +309,8 @@ await jsonBus.StartListeningAsync(new ProtocolConfiguration {
 JSON serializer ignores `[Udp]` ordering—standard JSON rules apply; `TypeName` embedded as `typeName`/`TypeName`.
 
 ---
-## Subscriptions
 
+## Subscriptions
 
 ```csharp
 bus.SubscribeTo<string>(s => Console.WriteLine($"Raw string: {s}"));
@@ -309,10 +322,11 @@ void HandlePerson(Person p) { /*...*/ }
 - Multiple handlers per type allowed
 - Subscription key is the protocol type name (attribute override or CLR name)
 - If no handler matches, message is silently ignored
+- Cast to `ISubscriptionSerialBus` and use `Subscribe<T>` when the handler needs an independent lifetime.
 
 ---
-## Sending
 
+## Sending
 
 ```csharp
 await bus.SendAsync("Hello peer");
@@ -322,8 +336,8 @@ await bus.SendAsync(new Person("Bob", 42, new Address("2 Road", "City", "ST", "2
 All messages on a bus instance use that instance’s `SerializationProtocol`.
 
 ---
-## Graceful Shutdown
 
+## Graceful Shutdown
 
 ```csharp
 await bus.CloseConnectionAsync();
@@ -334,6 +348,7 @@ await bus.CloseConnectionAsync();
 Cancels the receive loop & disposes socket.
 
 ---
+
 ## Designing Message Contracts (Delimited Serializer)
 
 1. Add `[UdpMessage]` (optional if CLR name is acceptable) to each root message type.
@@ -350,11 +365,11 @@ Cancels the receive loop & disposes socket.
 
 ### Primitive & String Support
 
-Primitive-like types (numeric, enum, Guid, DateTime, DateTimeOffset, decimal, string) are converted with `ToString()` / parsed at receive time.
+Primitive-like types use invariant round-trip formatting and explicit converters, including `DateTimeOffset`.
 
 ---
-## Implementing a Custom Serializer
 
+## Implementing a Custom Serializer
 
 ```csharp
 class MyBinarySerializer : IMessageSerializer {
@@ -364,6 +379,7 @@ class MyBinarySerializer : IMessageSerializer {
     public object? Deserialize(Type t, ReadOnlySpan<byte> data) { /* parse */ }
 }
 ```
+
 Registration options:
 
 1. Extend `SerialBusFactory` with a helper that injects your serializer.
@@ -379,9 +395,11 @@ Best practices:
 
 ## Error Handling & Resilience
 
-- Receive loop swallows unexpected exceptions to keep the socket alive (add logging hook where `catch { }` blocks exist if needed)
-- Malformed messages are skipped
-- Individual subscriber exceptions do not block other handlers
+- Malformed, truncated, oversized, or unknown-protocol frames are rejected before deserialization or large allocation.
+- Cancellation is propagated to callers.
+- A send throws when every configured endpoint fails; partial fan-out failures are logged.
+- Individual subscriber exceptions are logged and do not block other handlers.
+- TCP serializes writes per configured connection and removes failed connections so a later send can reconnect.
 
 ---
 
@@ -400,7 +418,7 @@ Transport abstraction lives behind `ISerialBus`.
 
 ### TCP (Implemented)
 
-Use `SerialBusFactory.CreateTcp()` and the same `ProtocolConfiguration` (ports now mean: `LocalPort` for listener; `RemoteEndPoint` / `BroadcastEndPoints` for outgoing connections). Broadcast fan-out writes the framed message to each active TCP stream (inbound accepted + established outbound). Ordering is preserved per-connection (TCP guarantee) but different peers may drift due to scheduling.
+Use `SerialBusFactory.CreateTcp()` and the same `ProtocolConfiguration` (`LocalPort` is the listener; `RemoteEndPoint` and `BroadcastEndPoints` are configured send targets). Accepted sockets are receive-only sessions and are never added to fan-out. Ordering is preserved per configured connection, while different peers may progress independently.
 
 Example:
 
@@ -433,23 +451,23 @@ Planned outline:
 
 ---
 
-## Samples
+## Examples and Tests
 
-See `sandbox/ClientA` and `sandbox/ClientB` for dual-process demonstration using both protocols simultaneously (Delimited + JSON) over loopback with independent ports.
-
-Integration tests (`MultiBroadcastTests`, `TcpIntegrationTests`) show:
+The quick starts above cover dual-process loopback setup. Integration tests (`MultiBroadcastTests`, `TcpIntegrationTests`, and `TransportHardeningTests`) cover:
 
 - UDP multi-endpoint broadcast
 - TCP fan-out & ordering guarantees
 - Concurrent full-mesh delivery
 - Duplicate endpoint de-duplication
+- TCP reconnect and concurrent frame integrity
+- Malformed input recovery, cancellation, and disposable subscriptions
+- All three serialization protocols
 
 ---
 
 ## Roadmap
 
-- Additional transports: TCP first, then optional secure channel wrapper
-- Binary packed serializer (struct layout aware)
+- Optional authenticated secure-channel wrapper
 - Source generator for zero-reflection fast path
 - Optional compression & encryption layers
 - Health / metrics callbacks
@@ -490,7 +508,7 @@ await bus.SendAsync(new Chat("me", "hi there"));
 
 ## License
 
-MIT (add LICENSE file if not already present).
+GPL-3.0-only. See [LICENSE](LICENSE).
 
 ---
 
@@ -515,7 +533,7 @@ Why: Reduce allocation pressure & GC pauses under sustained 30/60fps streaming. 
 
 Still Allocating:
 
-- Outbound RTP packet buffers (rented but not yet recycled by caller; future API may expose explicit return or custom pool)
+- Outbound RTP packets use exact-length managed arrays so callback consumers may retain them safely.
 - Control / negotiation JSON payloads
 
 Guidance:
@@ -545,9 +563,9 @@ Early, evolving support for sending pre‑encoded H.264 access units (Annex B) o
 
 - No NACK/RTX retransmissions, FEC, or packet pacing
 - No SRTP / DTLS keying (encryption is placeholder only)
-- No SPS/PPS out‑of‑band management (assumes stream already decodable at decoder)
+- No automatic SPS/PPS extraction; callers may supply `ProfileLevelId` and `SpropParameterSets` during negotiation.
 - No adaptive bitrate / congestion control (REMB/TCC/GCC)
-- Reorder buffer is simplistic (forward‑only)
+- Reordering is bounded and loss-recovering, but NACK/RTX is not implemented.
 - Only H.264 (no VP8/VP9/AV1/H.265)
 - No simulcast / SVC layers, no audio, no A/V sync
 - No ICE/STUN/TURN NAT traversal (you must provide transport)
@@ -555,7 +573,7 @@ Early, evolving support for sending pre‑encoded H.264 access units (Annex B) o
 ### Essential Types
 
 | Type | Purpose |
-|------|---------|
+| --- | --- |
 | `EncodedAccessUnit` | Represents one encoded frame (Annex B) + metadata; disposable (pooled buffer) |
 | `RtpVideoSender` | High-level sender: packetizes AUs, encrypts, emits RTP datagrams & sends SR |
 | `RtpVideoReceiver` | Consumes RTP / RTCP, reassembles frames, updates stats, raises `AccessUnitReceived` |
@@ -666,6 +684,8 @@ public interface IVideoPayloadCipher
     int OverheadBytes { get; }
     int Encrypt(Span<byte> buffer);
     int Decrypt(Span<byte> buffer);
+    int Encrypt(ReadOnlySpan<byte> payload, Span<byte> output);
+    int Decrypt(ReadOnlySpan<byte> payload, Span<byte> output);
 }
 
 public sealed class NoOpCipher : IVideoPayloadCipher { /* OverheadBytes=0; pass-through */ }
