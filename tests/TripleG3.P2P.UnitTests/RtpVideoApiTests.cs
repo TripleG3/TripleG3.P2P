@@ -4,7 +4,7 @@ using TripleG3.P2P.Video;
 using TripleG3.P2P.Video.Primitives;
 using Xunit;
 
-namespace TripleG3.P2P.VideoTests
+namespace TripleG3.P2P.UnitTests
 {
     public class RtpVideoApiTests
     {

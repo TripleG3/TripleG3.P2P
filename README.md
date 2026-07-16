@@ -453,7 +453,25 @@ Planned outline:
 
 ## Examples and Tests
 
-The quick starts above cover dual-process loopback setup. Integration tests (`MultiBroadcastTests`, `TcpIntegrationTests`, and `TransportHardeningTests`) cover:
+Tests are split by execution contract:
+
+- `TripleG3.P2P.UnitTests` contains deterministic, in-process serializer, packetizer, depacketizer, cipher, sequence, bounds, and validation tests.
+- `TripleG3.P2P.IntegrationTests` contains loopback sockets, multi-peer fan-out, reconnect, malformed network input, receiver lifecycle, DI-over-UDP video, RTCP timing, and negotiation flows.
+
+Pull-request and publish pipelines restore, build, and run only the unit-test project. Integration tests are intentionally manual because they bind local ports and use timing-sensitive multi-component flows.
+
+```powershell
+# Pipeline-equivalent unit tests
+dotnet test tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj -c Release -warnaserror
+
+# Manual integration tests
+dotnet test tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.csproj -c Release -warnaserror
+
+# Complete local validation
+dotnet test TripleG3.P2P.slnx -c Release -warnaserror
+```
+
+The integration suite (`MultiBroadcastTests`, `TcpIntegrationTests`, `TransportHardeningTests`, and the video integration fixtures) proves:
 
 - UDP multi-endpoint broadcast
 - TCP fan-out & ordering guarantees
@@ -462,6 +480,9 @@ The quick starts above cover dual-process loopback setup. Integration tests (`Mu
 - TCP reconnect and concurrent frame integrity
 - Malformed input recovery, cancellation, and disposable subscriptions
 - All three serialization protocols
+- RTP video DI transfer over a real UDP socket
+- Receiver start/stop/restart and disposal races
+- RTCP timing and negotiation/keyframe signaling
 
 ---
 

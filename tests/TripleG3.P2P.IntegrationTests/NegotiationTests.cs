@@ -2,15 +2,15 @@ using TripleG3.P2P.Video;
 using TripleG3.P2P.Video.Negotiation;
 using Xunit;
 
-namespace TripleG3.P2P.VideoTests;
+namespace TripleG3.P2P.IntegrationTests;
 
 public class NegotiationTests
 {
     [Fact]
     public async Task Negotiation_RoundTrip_OfferAnswer()
     {
-        var chA = new InMemoryControlChannel();
-        var chB = new InMemoryControlChannel();
+        await using var chA = new InMemoryControlChannel();
+        await using var chB = new InMemoryControlChannel();
         // Wire channels (simple bridge)
         chA.MessageReceived += m => chB.SendReliableAsync(m);
         chB.MessageReceived += m => chA.SendReliableAsync(m);

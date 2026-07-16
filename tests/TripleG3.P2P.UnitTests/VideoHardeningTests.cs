@@ -1,20 +1,14 @@
 using System.Buffers;
-using System.Net;
-using System.Net.Sockets;
-using Microsoft.Extensions.DependencyInjection;
 using TripleG3.P2P.Video;
-using TripleG3.P2P.Video.Abstractions;
 using TripleG3.P2P.Video.Internal;
 using TripleG3.P2P.Video.Primitives;
 using TripleG3.P2P.Video.Rtp;
 using Xunit;
 using StableReceiver = TripleG3.P2P.Video.RtpVideoReceiver;
-using StableReceiverInterface = TripleG3.P2P.Video.Abstractions.IRtpVideoReceiver;
 using StableSender = TripleG3.P2P.Video.RtpVideoSender;
-using StableSenderInterface = TripleG3.P2P.Video.Abstractions.IRtpVideoSender;
 using VideoAccessUnit = TripleG3.P2P.Video.EncodedAccessUnit;
 
-namespace TripleG3.P2P.VideoTests;
+namespace TripleG3.P2P.UnitTests;
 
 public sealed class VideoHardeningTests
 {
@@ -192,84 +186,6 @@ public sealed class VideoHardeningTests
         Assert.Equal(values.Length, values.Distinct().Count());
     }
 
-    [Fact]
-    public async Task Receiver_Start_Stop_And_Restart_Is_Idempotent()
-    {
-        var port = GetAvailableUdpPort();
-        await using var receiver = new StableReceiver(new RtpVideoReceiverConfig
-        {
-            LocalAddress = IPAddress.Loopback,
-            LocalPort = port
-        });
-
-        await receiver.StartAsync();
-        await receiver.StartAsync();
-        await receiver.StopAsync();
-        await receiver.StopAsync();
-        await receiver.StartAsync();
-        await receiver.StopAsync();
-    }
-
-    [Fact]
-    public async Task Receiver_Synchronous_Dispose_Can_Race_Stop_And_Prevents_Restart()
-    {
-        var receiver = new StableReceiver(new RtpVideoReceiverConfig
-        {
-            LocalAddress = IPAddress.Loopback,
-            LocalPort = GetAvailableUdpPort()
-        });
-        await receiver.StartAsync();
-
-        var stopTask = receiver.StopAsync();
-        receiver.Dispose();
-        await stopTask;
-
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => receiver.StartAsync());
-    }
-
-    [Fact]
-    public async Task DependencyInjection_Resolves_And_Transfers_Frame_Over_Udp()
-    {
-        var receiverPort = GetAvailableUdpPort();
-        var services = new ServiceCollection();
-        services.AddTripleG3P2PVideo(options =>
-        {
-            options.SenderConfiguration = new RtpVideoSenderConfig
-            {
-                RemoteIp = IPAddress.Loopback.ToString(),
-                RemotePort = receiverPort,
-                Ssrc = 0x9876,
-                PayloadType = 96,
-                Mtu = 300
-            };
-            options.ReceiverConfiguration = new RtpVideoReceiverConfig
-            {
-                LocalAddress = IPAddress.Loopback,
-                LocalPort = receiverPort,
-                ExpectedSsrc = 0x9876,
-                PayloadType = 96
-            };
-        });
-        using var provider = services.BuildServiceProvider();
-        var sender = provider.GetRequiredService<StableSenderInterface>();
-        var receiver = provider.GetRequiredService<StableReceiverInterface>();
-        var completion = new TaskCompletionSource<VideoAccessUnit>(TaskCreationOptions.RunContinuationsAsynchronously);
-        receiver.FrameReceived += accessUnit =>
-        {
-            if (accessUnit.HasValue) completion.TrySetResult(accessUnit.Value);
-        };
-        await receiver.StartAsync();
-        var annexB = BuildAnnexB(CreateNal(600, 0x65));
-        using var source = new VideoAccessUnit(annexB, true, 90000, 0);
-
-        Assert.True(await sender.SendAsync(source));
-        var result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(3));
-
-        Assert.Equal(annexB, result.AnnexB.ToArray());
-        result.Dispose();
-        await receiver.StopAsync();
-    }
-
     private static byte[] CreateNal(int length, byte header)
     {
         var nal = new byte[length];
@@ -286,9 +202,4 @@ public sealed class VideoHardeningTests
         return annexB;
     }
 
-    private static int GetAvailableUdpPort()
-    {
-        using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        return ((IPEndPoint)client.Client.LocalEndPoint!).Port;
-    }
 }

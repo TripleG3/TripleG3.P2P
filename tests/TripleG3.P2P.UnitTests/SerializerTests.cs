@@ -4,7 +4,7 @@ using TripleG3.P2P.Core;
 using TripleG3.P2P.Serialization;
 using Xunit;
 
-namespace TripleG3.P2P.IntegrationTests;
+namespace TripleG3.P2P.UnitTests;
 
 public sealed class SerializerTests
 {

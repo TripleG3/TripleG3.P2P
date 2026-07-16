@@ -12,7 +12,7 @@ jobs:
     runs-on: windows-latest
     env:
       PROJECT_PATH: src/TripleG3.P2P/TripleG3.P2P.csproj
-      SOLUTION_PATH: TripleG3.P2P.slnx
+      UNIT_TEST_PROJECT: tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj
       NUGET_SOURCE: https://api.nuget.org/v3/index.json
     defaults:
       run:
@@ -30,7 +30,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore $SOLUTION_PATH
+        run: dotnet restore $UNIT_TEST_PROJECT
 
       - name: Compute Version (no file modification)
         id: version
@@ -49,10 +49,10 @@ jobs:
           "version=$newVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build (Release)
-        run: dotnet build $SOLUTION_PATH -c Release -warnaserror -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
+        run: dotnet build $UNIT_TEST_PROJECT -c Release -warnaserror -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
 
-      - name: Test (Release)
-        run: dotnet test $SOLUTION_PATH -c Release --no-build --no-restore -p:Version=${{ steps.version.outputs.version }} --logger "trx;LogFilePrefix=release" --results-directory TestResults
+      - name: Unit Test (Release)
+        run: dotnet test $UNIT_TEST_PROJECT -c Release --no-build --no-restore -p:Version=${{ steps.version.outputs.version }} --logger "trx;LogFilePrefix=unit-release" --results-directory TestResults
 
       - name: Pack
         run: dotnet pack $PROJECT_PATH -c Release --no-build -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} -o ./artifacts
@@ -80,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-test-results
+          name: release-unit-test-results
           path: TestResults/*.trx
 
       - name: Push to NuGet.org

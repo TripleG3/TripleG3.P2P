@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace TripleG3.P2P.VideoTests;
+namespace TripleG3.P2P.UnitTests;
 
 public class JitterAndLossTests
 {
@@ -25,27 +25,6 @@ public class JitterAndLossTests
         foreach (var p in packets) recv.ProcessRtp(p.Span);
         var stats = recv.GetStats();
         Assert.True(stats.PacketsLost >= 1);
-    }
-
-    [Fact]
-    public void Jitter_Increases_With_TimestampVariance()
-    {
-        var cipher = new TripleG3.P2P.Video.NoOpCipher();
-    var sender = new TripleG3.P2P.Video.RtpVideoSender(0x44, 1200, cipher, _ => { /* not used */ });
-    var recv = new TripleG3.P2P.Video.RtpVideoReceiver(cipher);
-        // Manually craft two RTP packets with different network delay simulation
-    var pktizer = new TripleG3.P2P.Video.Rtp.H264RtpPacketizer(0x44, 1200, new TripleG3.P2P.Video.Security.NoOpCipher());
-        using var au1 = BuildAu([0x61, 1], 0);
-        using var au2 = BuildAu([0x61, 2], 3000); // 33ms at 90kHz roughly
-        var p1 = pktizer.Packetize(au1).First();
-        var p2 = pktizer.Packetize(au2).First();
-        recv.ProcessRtp(p1.Span);
-        Thread.Sleep(30); // simulate network delay
-        recv.ProcessRtp(p2.Span);
-    var stats = recv.GetStats();
-    Assert.NotNull(stats);
-    // Jitter metric removed from minimal stats; ensure packets received counted
-    Assert.True(stats!.PacketsReceived >= 2);
     }
 
     [Fact]

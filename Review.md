@@ -22,7 +22,7 @@ Implemented on 2026-07-15. The user had already upgraded all three projects to `
 | P1-7 | Added versioned `LengthPrefixed = 2` serialization with recursive framing and explicit null markers while preserving `None = 0`. |
 | P1-8 | Added one shared `[Udp]` contract model, constructor mapping by name/type, invariant values, and explicit `DateTimeOffset` support. |
 | P1-9 | Bounded RTP frame count, frame/NAL bytes, and assembly age; every completion/eviction/drop releases pooled buffers. |
-| P1-10 | Release CI uses .NET 10, builds/tests the SLNX before pack/push, validates package contents, and uploads results; PR CI was added. |
+| P1-10 | PR/release CI uses .NET 10 and runs only `TripleG3.P2P.UnitTests` before pack/push; integration tests remain manual. Package validation and result upload are enabled. |
 | P2-1 | Receiver enforces payload type/SSRC/jitter bounds and parses RTP CSRC, extension, and padding data. |
 | P2-2 | Subscription dispatch uses immutable snapshots and optional disposable registrations through `ISubscriptionSerialBus`. |
 | P2-3 | Stable high-level video APIs are canonical; duplicate high-level RTP and async encoder/decoder APIs are obsolete for 2.0 removal. |
@@ -266,7 +266,7 @@ A push to `main` can publish a package while integration or video tests fail to 
 
 Recommendation:
 
-Add a pull-request CI workflow and make release depend on a Release build plus both test projects. Test on the exact target runtime, upload test results, and consider a separate manually approved publish job. Add package validation that inspects metadata and the `.nupkg` contents.
+Add a pull-request CI workflow and make release depend on a Release build plus the deterministic unit-test project. Keep socket/timing integration tests manual, test on the exact target runtime, upload unit-test results, and consider a separate manually approved publish job. Add package validation that inspects metadata and the `.nupkg` contents.
 
 ### P2-1: Receiver configuration fields are accepted but ignored
 
@@ -350,7 +350,7 @@ The existing tests are useful happy-path checks, but the next test tranche shoul
 Two current assertions deserve replacement:
 
 - [VideoIntegrationTests.cs](tests/TripleG3.P2P.IntegrationTests/VideoIntegrationTests.cs#L96-L100) checks whether an unsigned loss count is greater than or equal to zero, which is always true.
-- [H264RtpDepacketizerTests.cs](tests/TripleG3.P2P.VideoTests/H264RtpDepacketizerTests.cs#L20-L27) discards results from the first packet pass and then replays mutated state, so it can miss an erroneous first delivery.
+- [H264RtpDepacketizerTests.cs](tests/TripleG3.P2P.UnitTests/H264RtpDepacketizerTests.cs#L20-L27) discards results from the first packet pass and then replays mutated state, so it can miss an erroneous first delivery.
 
 ## Recommended Remediation Order
 
@@ -359,7 +359,7 @@ Two current assertions deserve replacement:
 3. Replace RTP reorder/loss tracking and add bounded assembly limits before testing lossy networks.
 4. Redesign TCP peer identity, destination authorization, reconnect cleanup, and single-writer framing.
 5. Introduce a new versioned serializer protocol; do not silently alter the existing `None` wire format.
-6. Add negative-path tests and require both test projects in PR and release CI.
+6. Add negative-path tests, require unit tests in PR/release CI, and run the socket/timing integration project manually before release candidates.
 7. Consolidate or deprecate duplicate video APIs in the next compatible release window.
 
 ## P3 Improvements
@@ -381,7 +381,7 @@ Two current assertions deserve replacement:
 ## What Is Working Well
 
 - The library and both test projects compile cleanly with all warnings treated as errors.
-- All current tests pass: 20 integration tests and 16 video tests.
+- All current tests pass: 21 unit tests and 43 integration tests.
 - `ISerialBus`, `IMessageSerializer`, and `ProtocolConfiguration` are small and approachable abstractions.
 - UDP fan-out, endpoint de-duplication, mixed message types, and concurrent peer broadcasts have integration coverage.
 - UDP and RTP headers use explicit binary primitives, and the RTP parser validates version and CSRC length.
@@ -393,8 +393,9 @@ Two current assertions deserve replacement:
 | Check | Result |
 | --- | --- |
 | `dotnet build TripleG3.P2P.slnx -c Release -warnaserror` | Passed on .NET 10 with no warnings or errors. |
-| Integration test project, Release | 37 passed, 0 failed. |
-| Video test project, Release with warnings as errors | 27 passed, 0 failed. |
+| Unit-test project, Release with warnings as errors | 21 passed, 0 failed; this is the only test project used by CI/release workflows. |
+| Integration-test project, manual Release run | 43 passed, 0 failed. |
+| Complete SLNX test run | 64 passed, 0 failed. |
 | Package generation and manifest inspection | Passed; package targets `net10.0`, declares `GPL-3.0-only`, and contains README, LICENSE, DLL, symbols. |
 | `Convert.ChangeType` probe for `DateTimeOffset` | Failed with invalid cast, confirming the advertised type cannot use the generic conversion path. |
 | `TcpClient` endpoint-after-close probe | Endpoint was unavailable after close, confirming the current dictionary cleanup order cannot recover its key. |

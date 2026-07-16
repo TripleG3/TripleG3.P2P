@@ -1,4 +1,4 @@
-namespace TripleG3.P2P.VideoTests;
+namespace TripleG3.P2P.UnitTests;
 
 internal sealed class TaggedVideoCipher(byte key = 0x5A) : TripleG3.P2P.Video.IVideoPayloadCipher
 {

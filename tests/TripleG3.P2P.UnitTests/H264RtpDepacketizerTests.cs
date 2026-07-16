@@ -1,7 +1,7 @@
 using TripleG3.P2P.Video.Rtp;
 using Xunit;
 
-namespace TripleG3.P2P.VideoTests;
+namespace TripleG3.P2P.UnitTests;
 
 public class H264RtpDepacketizerTests
 {

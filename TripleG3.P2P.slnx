@@ -4,6 +4,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.csproj" />
-    <Project Path="tests/TripleG3.P2P.VideoTests/TripleG3.P2P.VideoTests.csproj" />
+    <Project Path="tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj" />
   </Folder>
 </Solution>

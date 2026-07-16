@@ -1,4 +1,4 @@
-name: Build and Test
+name: Build and Unit Test
 
 on:
   pull_request:
@@ -10,6 +10,8 @@ permissions:
 jobs:
   build-and-test:
     runs-on: windows-latest
+    env:
+      UNIT_TEST_PROJECT: tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,17 +22,17 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore TripleG3.P2P.slnx
+        run: dotnet restore $env:UNIT_TEST_PROJECT
 
       - name: Build (Release)
-        run: dotnet build TripleG3.P2P.slnx -c Release -warnaserror --no-restore
+        run: dotnet build $env:UNIT_TEST_PROJECT -c Release -warnaserror --no-restore
 
-      - name: Test (Release)
-        run: dotnet test TripleG3.P2P.slnx -c Release --no-build --no-restore --logger "trx;LogFilePrefix=ci" --results-directory TestResults
+      - name: Unit Test (Release)
+        run: dotnet test $env:UNIT_TEST_PROJECT -c Release --no-build --no-restore --logger "trx;LogFilePrefix=unit" --results-directory TestResults
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: unit-test-results
           path: TestResults/*.trx

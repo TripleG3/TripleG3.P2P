@@ -144,12 +144,20 @@ Low-level `RtpPacket`, `H264RtpPacketizer`, `H264RtpDepacketizer`, and RTCP help
 
 ## Test Coverage
 
-The video tests cover:
+Unit tests cover deterministic in-process behavior:
 
 - exact single-NAL and FU-A byte reconstruction;
 - authenticated cipher overhead and tamper rejection;
 - loss recovery and sequence-number wrap/concurrency;
 - SSRC and payload-type filtering;
 - bounded oversized-frame rejection;
+
+Manual integration tests cover:
+
 - receiver start, stop, and restart;
-- complete DI resolution and UDP frame transfer.
+- complete DI resolution and UDP frame transfer;
+- RTCP timing, negotiation round trips, and keyframe signaling.
+
+```powershell
+dotnet test tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.csproj -c Release -warnaserror
+```

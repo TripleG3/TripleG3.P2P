@@ -2,7 +2,7 @@ using TripleG3.P2P.Video;
 using TripleG3.P2P.Video.Negotiation;
 using Xunit;
 
-namespace TripleG3.P2P.VideoTests;
+namespace TripleG3.P2P.IntegrationTests;
 
 public class PliKeyFrameTests
 {
@@ -16,8 +16,8 @@ public class PliKeyFrameTests
     [Fact]
     public async Task Pli_Triggers_Keyframe_Request_On_Remote()
     {
-    var chA = new TripleG3.P2P.Video.InMemoryControlChannel();
-    var chB = new TripleG3.P2P.Video.InMemoryControlChannel();
+    await using var chA = new TripleG3.P2P.Video.InMemoryControlChannel();
+    await using var chB = new TripleG3.P2P.Video.InMemoryControlChannel();
         chA.MessageReceived += m => chB.SendReliableAsync(m);
         chB.MessageReceived += m => chA.SendReliableAsync(m);
         var mgrA = new NegotiationManager(chA);
