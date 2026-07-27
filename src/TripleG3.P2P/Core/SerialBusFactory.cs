@@ -31,9 +31,4 @@ public static class SerialBusFactory
             new LengthPrefixedMessageSerializer()
         ]);
 
-    /// <summary>
-    /// Placeholder for future FTP-based transport (likely will be a control channel + file payload hybrid).
-    /// Currently not implemented.
-    /// </summary>
-    public static ISerialBus CreateFtp() => throw new NotImplementedException("FTP transport not yet implemented.");
 }

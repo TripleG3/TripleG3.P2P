@@ -13,3 +13,4 @@
 - 2026-07-15: Use `SerializationProtocol.LengthPrefixed` for new attribute contracts; retain `None` only for existing wire compatibility.
 - 2026-07-15: TCP accepted sockets are receive-only; outbound fan-out targets only configured endpoints and serializes writes per connection.
 - 2026-07-15: Video receive loops start only through `StartAsync` and must be stopped or asynchronously disposed.
+- 2026-07-27: FTP is not an `ISerialBus` transport; the unimplemented `CreateFtp` factory, test, documentation, and package tag were removed. Use a separate file-transfer abstraction for large payloads.

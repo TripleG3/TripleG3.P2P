@@ -12,7 +12,7 @@
 		<Company>TripleG3</Company>
 		<Product>TripleG3.P2P</Product>
 		<Description>Peer-to-peer UDP and TCP messaging for .NET 10 apps with attribute-based serialization and experimental RTP video support.</Description>
-		<PackageTags>MAUI;UDP;TCP;FTP;Networking;Serialization;P2P</PackageTags>
+		<PackageTags>MAUI;UDP;TCP;Networking;Serialization;P2P</PackageTags>
 		<PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
 		<RepositoryUrl>https://github.com/TripleG3/TripleG3.P2P</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>

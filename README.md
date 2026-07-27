@@ -2,7 +2,7 @@
 
 High-performance, attribute-driven peer-to-peer messaging for .NET 10 / MAUI apps over UDP and TCP. Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8-byte header and pluggable serialization strategy.
 
-> Status: UDP and TCP transports plus three serializers (`None`, `JsonRaw`, and `LengthPrefixed`) are implemented. RTP/H.264 video remains experimental.
+> Status: UDP and TCP transports plus three serializers (`None`, `JsonRaw`, and `LengthPrefixed`) are implemented. Direct peer-to-peer TCP file transfer is available. RTP/H.264 video remains experimental.
 
 ---
 
@@ -31,7 +31,7 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 - Plug-in serializer model (`IMessageSerializer`)
 - Graceful cancellation / disposal
 - TCP transport (reliable stream) alongside UDP; same API
-- FTP transport placeholder (factory method exists; not implemented yet)
+- Direct peer-to-peer TCP file transfer with receiver consent, cancellation, progress, and SHA-256 verification
 
 ### Transport Summary
 
@@ -39,9 +39,33 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 | --- | --- | --- | --- | --- |
 | UDP | Best effort / loss possible | Not guaranteed across datagrams | Yes (multi-endpoint send) | Implemented |
 | TCP | Reliable | Preserved per connection | Yes (writes to each stream) | Implemented |
-| FTP | N/A (file transfer layer) | N/A | Planned (large payload offload) | Planned |
 
 Use UDP when you need lowest overhead and can tolerate loss; use TCP when you need reliability / ordering without building it yourself.
+
+### Peer-to-peer file transfer
+
+File transfer is intentionally separate from `ISerialBus`. Create a `PeerFileTransferClient` for each peer, start its listener, and handle incoming requests explicitly. A receiver can reject a request or accept it with a destination path; cancellation tokens cancel active sender or receiver operations. Transfers use a dedicated versioned TCP protocol, stream in bounded chunks, write to a temporary `.part` file, and verify SHA-256 before moving the completed file into place.
+
+```csharp
+var receiver = new PeerFileTransferClient(new FileTransferOptions {
+    LocalEndPoint = new IPEndPoint(IPAddress.Loopback, 9100)
+});
+receiver.TransferRequested += (request, cancellationToken) =>
+    new ValueTask<FileTransferDecision>(
+        FileTransferDecision.Accept(Path.Combine("received", request.FileName)));
+await receiver.StartAsync();
+
+var sender = new PeerFileTransferClient(new FileTransferOptions {
+    LocalEndPoint = new IPEndPoint(IPAddress.Loopback, 9101)
+});
+await sender.StartAsync();
+var results = await sender.SendAsync(
+    "video.mp4",
+    [new IPEndPoint(IPAddress.Loopback, 9100)],
+    cancellationToken: cancellationToken);
+```
+
+If no `TransferRequested` handler is registered, inbound transfers are rejected. The receiver may reject a request from the handler, and the sender may cancel through its cancellation token. Configure `MaximumFileBytes`, `BufferSize`, and `MaximumConcurrentTransfers` for the host.
 
 ---
 
@@ -85,7 +109,7 @@ public interface ISerialBus {
 }
 ```
 
-Abstracts the transport (currently UDP + TCP; FTP planned). Your code remains identical besides construction via the factory.
+Abstracts the transport (currently UDP + TCP). Your code remains identical besides construction via the factory.
 
 Both built-in buses also implement `ISubscriptionSerialBus`, whose `Subscribe<T>` method returns an `IDisposable` unsubscription registration.
 
@@ -433,21 +457,6 @@ await tcpBus.StartListeningAsync(new ProtocolConfiguration {
 tcpBus.SubscribeTo<Chat>(c => Console.WriteLine($"[TCP] {c.User}: {c.Text}"));
 await tcpBus.SendAsync(new Chat("alice", "over tcp"));
 ```
-
-### FTP (Planned)
-
-`SerialBusFactory.CreateFtp()` is a stub today (throws). The intended design is a control channel for small messages and opportunistic file uploads for large payloads.
-
-```csharp
-try { var ftp = SerialBusFactory.CreateFtp(); }
-catch (NotImplementedException) { /* expected for now */ }
-```
-
-Planned outline:
-
-1. Lightweight command channel (possibly TCP) implementing `ISerialBus` semantics for control messages.
-2. Escalation to file transfer for large payloads (chunked + resume).
-3. Optional integrity (hash) verification & parallel segment streaming.
 
 ---
 

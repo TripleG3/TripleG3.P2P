@@ -148,12 +148,6 @@ public class TcpIntegrationTests
         await recv.CloseConnectionAsync();
     }
 
-    [Fact]
-    public void Ftp_Factory_Not_Implemented()
-    {
-        Assert.Throws<NotImplementedException>(() => SerialBusFactory.CreateFtp());
-    }
-
     // Helpers
     private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 4000, int pollMs = 25)
     {
