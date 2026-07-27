@@ -32,6 +32,7 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 - Graceful cancellation / disposal
 - TCP transport (reliable stream) alongside UDP; same API
 - Direct peer-to-peer TCP file transfer with receiver consent, cancellation, progress, and SHA-256 verification
+- Separate stdio MCP server for AI-assisted configuration, code generation, documentation, and troubleshooting
 
 ### Transport Summary
 
@@ -40,13 +41,15 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 | UDP | Best effort / loss possible | Not guaranteed across datagrams | Yes (multi-endpoint send) | Implemented |
 | TCP | Reliable | Preserved per connection | Yes (writes to each stream) | Implemented |
 
-Use UDP when you need lowest overhead and can tolerate loss; use TCP when you need reliability / ordering without building it yourself.
+Use UDP when you need lowest overhead and can tolerate loss; use TCP when you need reliability / ordering without building it yourself. Neither transport provides authentication or NAT traversal; applications must provide peer authorization and network connectivity.
 
 ### Peer-to-peer file transfer
 
 File transfer is intentionally separate from `ISerialBus`. Create a `PeerFileTransferClient` for each peer, start its listener, and handle incoming requests explicitly. A receiver can reject a request or accept it with a destination path; cancellation tokens cancel active sender or receiver operations. Transfers use a dedicated versioned TCP protocol, stream in bounded chunks, write to a temporary `.part` file, and verify SHA-256 before moving the completed file into place.
 
 ```csharp
+using TripleG3.P2P.FileTransfer;
+
 var receiver = new PeerFileTransferClient(new FileTransferOptions {
     LocalEndPoint = new IPEndPoint(IPAddress.Loopback, 9100)
 });
@@ -71,7 +74,7 @@ If no `TransferRequested` handler is registered, inbound transfers are rejected.
 
 ## Installation
 
-Install from NuGet:
+Install the core library from NuGet:
 
 ```bash
 dotnet add package TripleG3.P2P
@@ -79,9 +82,17 @@ dotnet add package TripleG3.P2P
 
 Symbols are published; enable source stepping to debug internals.
 
+The MCP server is a separate executable and is not included in the NuGet package. Run it locally from the repository with:
+
+```text
+dotnet run --project src/TripleG3.P2P.McpServer/TripleG3.P2P.McpServer.csproj --no-launch-profile
+```
+
+VS Code integration is configured in `.vscode/mcp.json`.
+
 ### Versioning & CI
 
-CI rewrites the patch component using the GitHub Actions run number. Base `<Version>` in the csproj should be updated only for major/minor increments (e.g. `1.1.0` / `2.0.0`). Published versions become `Major.Minor.RunNumber` and the workflow commits the updated version back without re-triggering.
+The release workflow derives `Major.Minor.RunNumber` from the project version and publishes the package when a push reaches `main`. Set the repository `NUGET_API_KEY` secret before enabling publishing. Local packages can be created with `dotnet pack src/TripleG3.P2P/TripleG3.P2P.csproj -c Release`.
 
 ---
 
@@ -208,7 +219,7 @@ services.AddP2PUdp(); // Registers None + JsonRaw + LengthPrefixed serializers a
 var bus = services.BuildServiceProvider().GetRequiredService<ISerialBus>();
 ```
 
-Need TCP as well? Use `SerialBusFactory.CreateTcp()` (a combined DI extension can be added later).
+Need TCP as well? Use `SerialBusFactory.CreateTcp()`. A combined TCP DI extension is not currently provided.
 
 ### Envelope (Generic)
 
@@ -467,7 +478,7 @@ Tests are split by execution contract:
 - `TripleG3.P2P.UnitTests` contains deterministic, in-process serializer, packetizer, depacketizer, cipher, sequence, bounds, and validation tests.
 - `TripleG3.P2P.IntegrationTests` contains loopback sockets, multi-peer fan-out, reconnect, malformed network input, receiver lifecycle, DI-over-UDP video, RTCP timing, and negotiation flows.
 
-Pull-request and publish pipelines restore, build, and run only the unit-test project. Integration tests are intentionally manual because they bind local ports and use timing-sensitive multi-component flows.
+The pull-request and publish pipelines currently restore, build, and run only the unit-test project. Integration tests bind local ports and use timing-sensitive multi-component flows, so run them locally before release validation.
 
 ```powershell
 # Pipeline-equivalent unit tests
@@ -479,6 +490,8 @@ dotnet test tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.cs
 # Complete local validation
 dotnet test TripleG3.P2P.slnx -c Release -warnaserror
 ```
+
+The solution also contains the executable MCP server project. It is built by the solution but is not packed into `TripleG3.P2P`.
 
 The integration suite (`MultiBroadcastTests`, `TcpIntegrationTests`, `TransportHardeningTests`, and the video integration fixtures) proves:
 
@@ -497,6 +510,8 @@ The integration suite (`MultiBroadcastTests`, `TcpIntegrationTests`, `TransportH
 
 ## Roadmap
 
+- Authentication and authorization for messaging and file-transfer peers
+- Resumable file transfers and receiver-selected progress reporting
 - Optional authenticated secure-channel wrapper
 - Source generator for zero-reflection fast path
 - Optional compression & encryption layers

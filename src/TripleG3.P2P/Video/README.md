@@ -1,6 +1,6 @@
 # TripleG3.P2P.Video
 
-Experimental, DI-friendly H.264 over RTP for .NET 10. The canonical public API is in `TripleG3.P2P.Video`; low-level packet types remain under `TripleG3.P2P.Video.Rtp`.
+Experimental, DI-friendly H.264 over RTP for .NET 10. The canonical public API is in `TripleG3.P2P.Video`; low-level packet types remain under `TripleG3.P2P.Video.Rtp`. This subsystem is included in the core package but should be treated as experimental and is not a general-purpose WebRTC implementation.
 
 ## Stable Entry Points
 
@@ -118,7 +118,7 @@ The receiver constructor performs no asynchronous work. `StartAsync` is idempote
 
 The complete RTP payload is protected consistently for both single-NAL and FU-A packets. `OverheadBytes` is reserved inside the configured MTU. Ciphers that append authentication data must implement the separate input/output overloads; the default overload rejects nonzero overhead rather than silently truncating it.
 
-`NoOpCipher` is a transport placeholder, not security. Production media security should use an authenticated design with managed key establishment, such as SRTP integrated by the application.
+`NoOpCipher` and test ciphers are transport placeholders, not security. Production media security should use an authenticated design with managed key establishment, such as SRTP integrated by the application. The library does not provide DTLS, SRTP key exchange, ICE, STUN, or TURN.
 
 ## Receiver Behavior
 
@@ -129,6 +129,7 @@ The complete RTP payload is protected consistently for both single-NAL and FU-A 
 - A sequence gap invalidates the current H.264 frame but does not block later frames.
 - In-flight frame count, frame bytes, NAL bytes, and assembly age are bounded.
 - Every dropped or completed pooled assembly returns its buffers.
+- RTP receive validation is not a substitute for peer authentication; applications must authorize the network source and protect the control/signaling channel.
 
 ## Memory Ownership
 
@@ -144,7 +145,7 @@ Low-level `RtpPacket`, `H264RtpPacketizer`, `H264RtpDepacketizer`, and RTCP help
 
 ## Test Coverage
 
-Unit tests cover deterministic in-process behavior:
+The repository targets `net10.0`. Unit tests cover deterministic in-process behavior:
 
 - exact single-NAL and FU-A byte reconstruction;
 - authenticated cipher overhead and tamper rejection;
