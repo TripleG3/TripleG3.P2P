@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/TripleG3.P2P.McpServer/TripleG3.P2P.McpServer.csproj" />
     <Project Path="src/TripleG3.P2P/TripleG3.P2P.csproj" />
   </Folder>
   <Folder Name="/tests/">
