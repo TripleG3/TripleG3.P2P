@@ -1,5 +1,26 @@
 # TripleG3.P2P
 
+## Alice-facing transport APIs
+
+`TripleG3.P2P` exposes transport-only primitives that a host such as Alice can map into its own
+authorization, workflow, and UI state services:
+
+- `TripleG3.P2P.FileTransfer.IFileTransferClient` provides explicit-consent, SHA-256-verified TCP
+    file transfer. A receiver rejects offers by default if it has no `TransferRequested` handler.
+- `TripleG3.P2P.Core.ISubscriptionSerialBus.Subscribe<T>` returns a disposable subscription. All
+    registrations are cleared when the bus connection closes or the bus is disposed.
+- `TripleG3.P2P.Video.RtpVideoSender` and `RtpVideoReceiver` provide H.264 Annex-B/RTP transport.
+- `TripleG3.P2P.Audio.RtpAudioSender` and `RtpAudioReceiver` provide 48 kHz mono, 20 ms Opus/RTP
+    transport with bounded receiver delivery.
+- `IPeerAuthorizer` is host-supplied and is evaluated before inbound serial, file-transfer, and audio
+    media payloads are processed. Use an approved session/device allowlist; endpoint identity alone is
+    not sufficient.
+- File and audio transports expose `P2PDiagnosticEventArgs` for lifecycle, authorization, and transfer
+    progress state projection.
+
+Production callers must supply an authenticated encryption/channel implementation before accepting
+untrusted user traffic. `NoOpCipher` and test ciphers are not appropriate for deployed traffic.
+
 High-performance, attribute-driven peer-to-peer messaging for .NET 10 / MAUI apps over UDP and TCP. Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8-byte header and pluggable serialization strategy.
 
 > Status: UDP and TCP transports plus three serializers (`None`, `JsonRaw`, and `LengthPrefixed`) are implemented. Direct peer-to-peer TCP file transfer is available. RTP/H.264 video remains experimental.

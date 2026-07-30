@@ -44,4 +44,13 @@ public sealed class ProtocolConfiguration
     /// Serialization protocol used for every message on this bus.
     /// </summary>
     public SerializationProtocol SerializationProtocol { get; init; } = SerializationProtocol.None;
+
+    /// <summary>Optional host-owned policy evaluated before an inbound serial payload is deserialized.</summary>
+    public IPeerAuthorizer? PeerAuthorizer { get; init; }
+
+    /// <summary>Optional approved session identifier provided to the authorization policy.</summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>Optional expected sender device identifier provided to the authorization policy.</summary>
+    public string? SenderDeviceId { get; init; }
 }

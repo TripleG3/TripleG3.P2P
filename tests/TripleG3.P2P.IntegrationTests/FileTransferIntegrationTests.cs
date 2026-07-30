@@ -71,6 +71,23 @@ public sealed class FileTransferIntegrationTests
         File.Delete(source);
     }
 
+    [Fact]
+    public async Task Receiver_without_a_handler_rejects_by_default()
+    {
+        var receiverPort = GetFreePort();
+        var source = Path.Combine(Path.GetTempPath(), $"p2p-default-reject-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(source, "private content");
+
+        await using var sender = new PeerFileTransferClient(new FileTransferOptions { LocalEndPoint = new IPEndPoint(IPAddress.Loopback, GetFreePort()) });
+        await using var receiver = new PeerFileTransferClient(new FileTransferOptions { LocalEndPoint = new IPEndPoint(IPAddress.Loopback, receiverPort) });
+        await receiver.StartAsync();
+        var results = await sender.SendAsync(source, [new IPEndPoint(IPAddress.Loopback, receiverPort)]);
+
+        Assert.False(Assert.Single(results).Succeeded);
+        Assert.Contains("not enabled", results[0].FailureReason, StringComparison.OrdinalIgnoreCase);
+        File.Delete(source);
+    }
+
     private static int GetFreePort()
     {
         using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);

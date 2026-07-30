@@ -169,6 +169,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _subscriptions.Clear();
         if (client is null) return;
         cts?.Cancel();
         client.Dispose();
@@ -201,6 +202,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _subscriptions.Clear();
         cts?.Cancel();
         client?.Dispose();
         cts?.Dispose();
@@ -220,6 +222,12 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             try
             {
                 var result = await client.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                if (!await IsAuthorizedAsync(result.RemoteEndPoint, cancellationToken).ConfigureAwait(false))
+                {
+                    _logger.LogWarning("Rejected unauthorized UDP peer {RemoteEndPoint}.", result.RemoteEndPoint);
+                    continue;
+                }
+
                 ProcessIncoming(result.Buffer);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -320,6 +328,15 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
     {
         var attribute = type.GetCustomAttribute<UdpMessageAttribute>();
         return attribute?.Name is { Length: > 0 } name ? name : type.Name;
+    }
+
+    private async ValueTask<bool> IsAuthorizedAsync(IPEndPoint peer, CancellationToken cancellationToken)
+    {
+        var config = _config;
+        if (config?.PeerAuthorizer is null) return true;
+        return await config.PeerAuthorizer.AuthorizeAsync(
+            new PeerAuthorizationContext(config.SessionId, config.SenderDeviceId, peer, P2PResourceKind.SerialMessage),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private void ValidateConfiguration(ProtocolConfiguration config)

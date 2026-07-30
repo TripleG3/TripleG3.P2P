@@ -1,4 +1,5 @@
 using System.Net;
+using TripleG3.P2P.Core;
 
 namespace TripleG3.P2P.FileTransfer;
 
@@ -22,4 +23,7 @@ public interface IFileTransferClient : IAsyncDisposable
 
     /// <summary>Raised when a remote peer requests permission to send a file.</summary>
     event Func<FileTransferRequest, CancellationToken, ValueTask<FileTransferDecision>>? TransferRequested;
+
+    /// <summary>Raised for listener, authorization, and individual transfer lifecycle changes.</summary>
+    event EventHandler<P2PDiagnosticEventArgs>? Diagnostic;
 }

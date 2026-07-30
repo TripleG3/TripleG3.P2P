@@ -171,6 +171,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _subscriptions.Clear();
         if (listener is null) return;
         cts?.Cancel();
         listener.Stop();
@@ -219,6 +220,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _subscriptions.Clear();
         cts?.Cancel();
         listener?.Stop();
         foreach (var outbound in _outboundConnections.ToArray()) RemoveOutbound(outbound.Key, outbound.Value);
@@ -248,6 +250,16 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
                 if (config is null || _inboundConnections.Count >= config.MaxInboundConnections)
                 {
                     _logger.LogWarning("Rejected TCP connection because the inbound session limit was reached.");
+                    client.Dispose();
+                    continue;
+                }
+
+                var peer = (IPEndPoint)client.Client.RemoteEndPoint!;
+                if (config.PeerAuthorizer is not null && !await config.PeerAuthorizer.AuthorizeAsync(
+                    new PeerAuthorizationContext(config.SessionId, config.SenderDeviceId, peer, P2PResourceKind.SerialMessage),
+                    cancellationToken).ConfigureAwait(false))
+                {
+                    _logger.LogWarning("Rejected unauthorized TCP peer {RemoteEndPoint}.", peer);
                     client.Dispose();
                     continue;
                 }

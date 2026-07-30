@@ -14,3 +14,6 @@
 - 2026-07-15: TCP accepted sockets are receive-only; outbound fan-out targets only configured endpoints and serializes writes per connection.
 - 2026-07-15: Video receive loops start only through `StartAsync` and must be stopped or asynchronously disposed.
 - 2026-07-27: FTP is not an `ISerialBus` transport; the unimplemented `CreateFtp` factory, test, documentation, and package tag were removed. Use a separate file-transfer abstraction for large payloads.
+- 2026-07-30: Alice-facing inbound transports use the host-provided `IPeerAuthorizer` before payload/file allocation; do not use endpoint identity as authorization.
+- 2026-07-30: File transfers require explicit receiver consent, stream to `.part`, verify SHA-256 before the final move, and report per-peer results and diagnostics.
+- 2026-07-30: Opus RTP is 48 kHz mono in 20 ms packets with a bounded receiver dispatch queue; preserve restartable `StartAsync`/`StopAsync` lifecycle.

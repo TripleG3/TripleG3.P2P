@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using TripleG3.P2P.Core;
 
 namespace TripleG3.P2P.FileTransfer;
 
@@ -31,6 +32,8 @@ public sealed class PeerFileTransferClient : IFileTransferClient
 
     public event Func<FileTransferRequest, CancellationToken, ValueTask<FileTransferDecision>>? TransferRequested;
 
+    public event EventHandler<P2PDiagnosticEventArgs>? Diagnostic;
+
     public bool IsListening => Volatile.Read(ref _listener) is not null;
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
@@ -44,6 +47,7 @@ public sealed class PeerFileTransferClient : IFileTransferClient
             _listener = new TcpListener(_options.LocalEndPoint);
             _listener.Start();
             _acceptTask = AcceptLoopAsync(_listener, _cts.Token);
+            Report(P2PDiagnosticKind.ListenerStarted, _options.LocalEndPoint);
         }
         return ValueTask.CompletedTask;
     }
@@ -80,6 +84,7 @@ public sealed class PeerFileTransferClient : IFileTransferClient
         if (listener is null) return;
         cts?.Cancel();
         listener.Stop();
+        Report(P2PDiagnosticKind.ListenerStopped, _options.LocalEndPoint);
         if (acceptTask is not null)
         {
             try { await acceptTask.ConfigureAwait(false); }
@@ -106,6 +111,14 @@ public sealed class PeerFileTransferClient : IFileTransferClient
             try
             {
                 var client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                var peer = (IPEndPoint)client.Client.RemoteEndPoint!;
+                if (!await IsAuthorizedAsync(peer, cancellationToken).ConfigureAwait(false))
+                {
+                    Report(P2PDiagnosticKind.AuthorizationRejected, peer, "Inbound file-transfer peer was rejected.");
+                    client.Dispose();
+                    continue;
+                }
+
                 var task = HandleIncomingAsync(client, cancellationToken);
                 lock (_activeTasks) _activeTasks.Add(task);
                 _ = task.ContinueWith(completed => { lock (_activeTasks) _activeTasks.Remove(completed); }, TaskScheduler.Default);
@@ -145,10 +158,13 @@ public sealed class PeerFileTransferClient : IFileTransferClient
                     {
                         await FileTransferProtocol.WriteDecisionAsync(stream, true, null, timeout.Token).ConfigureAwait(false);
                         if (string.IsNullOrWhiteSpace(decision.DestinationPath)) throw new InvalidDataException("Accepted transfer did not specify a destination path.");
+                        var destination = ValidateDestinationPath(decision.DestinationPath, request.FileName);
                         try
                         {
-                            var result = await ReceiveBytesAsync(stream, request.Id, request.FileName, request.Length, request.Sha256, decision.DestinationPath, peer, null, timeout.Token).ConfigureAwait(false);
+                            Report(P2PDiagnosticKind.FileTransferStarted, peer, transferId: request.Id);
+                            var result = await ReceiveBytesAsync(stream, request.Id, request.FileName, request.Length, request.Sha256, destination, peer, null, timeout.Token).ConfigureAwait(false);
                             await FileTransferProtocol.WriteDecisionAsync(stream, result.Succeeded, result.FailureReason, timeout.Token).ConfigureAwait(false);
+                            Report(result.Succeeded ? P2PDiagnosticKind.FileTransferCompleted : P2PDiagnosticKind.FileTransferFailed, peer, result.FailureReason, request.Id);
                         }
                         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
                         {
@@ -180,6 +196,7 @@ public sealed class PeerFileTransferClient : IFileTransferClient
         var id = Guid.NewGuid();
         try
         {
+            Report(P2PDiagnosticKind.FileTransferStarted, peer, transferId: id);
             using var client = new TcpClient(peer.AddressFamily);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(_options.RequestTimeout);
@@ -190,12 +207,16 @@ public sealed class PeerFileTransferClient : IFileTransferClient
             if (!decision.Accepted) return Failed(id, peer, metadata, decision.Reason);
             await SendBytesAsync(stream, id, metadata, sourcePath, peer, progress, timeout.Token).ConfigureAwait(false);
             var completion = await FileTransferProtocol.ReadDecisionAsync(stream, timeout.Token).ConfigureAwait(false);
-            return completion.Accepted ? new FileTransferResult(id, peer, metadata.FileName, metadata.Length, metadata.Sha256, true) : Failed(id, peer, metadata, completion.Reason);
+            var result = completion.Accepted ? new FileTransferResult(id, peer, metadata.FileName, metadata.Length, metadata.Sha256, true) : Failed(id, peer, metadata, completion.Reason);
+            Report(result.Succeeded ? P2PDiagnosticKind.FileTransferCompleted : P2PDiagnosticKind.FileTransferFailed, peer, result.FailureReason, id);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
-            return Failed(id, peer, metadata, exception.Message);
+            var result = Failed(id, peer, metadata, exception.Message);
+            Report(P2PDiagnosticKind.FileTransferFailed, peer, result.FailureReason, id);
+            return result;
         }
         finally { _transferGate.Release(); }
     }
@@ -214,7 +235,11 @@ public sealed class PeerFileTransferClient : IFileTransferClient
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
                 actual = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             }
-            if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase)) return Failed(id, peer, new FileMetadata(fileName, length, actual), "SHA-256 integrity check failed.");
+            if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(temporary);
+                return Failed(id, peer, new FileMetadata(fileName, length, actual), "SHA-256 integrity check failed.");
+            }
             File.Move(temporary, destination, true);
             return new FileTransferResult(id, peer, fileName, length, actual, true);
         }
@@ -271,9 +296,9 @@ public sealed class PeerFileTransferClient : IFileTransferClient
         if (length < 0 || length > _options.MaximumFileBytes) throw new InvalidDataException("File exceeds the configured transfer limit.");
     }
 
-    private static async Task CopyExactAsync(Stream input, Stream output, IncrementalHash hash, Guid id, string name, long length, IProgress<FileTransferProgress>? progress, CancellationToken cancellationToken)
+    private async Task CopyExactAsync(Stream input, Stream output, IncrementalHash hash, Guid id, string name, long length, IProgress<FileTransferProgress>? progress, CancellationToken cancellationToken)
     {
-        var buffer = new byte[64 * 1024];
+        var buffer = new byte[_options.BufferSize];
         long copied = 0;
         while (copied < length)
         {
@@ -283,10 +308,29 @@ public sealed class PeerFileTransferClient : IFileTransferClient
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             copied += read;
             progress?.Report(new FileTransferProgress(id, name, copied, length));
+            Report(P2PDiagnosticKind.FileTransferProgress, transferId: id);
         }
     }
 
     private static FileTransferResult Failed(Guid id, IPEndPoint peer, FileMetadata metadata, string? reason) => new(id, peer, metadata.FileName, metadata.Length, metadata.Sha256, false, reason);
+
+    private async ValueTask<bool> IsAuthorizedAsync(IPEndPoint peer, CancellationToken cancellationToken)
+    {
+        if (_options.PeerAuthorizer is null) return true;
+        return await _options.PeerAuthorizer.AuthorizeAsync(
+            new PeerAuthorizationContext(_options.SessionId, _options.SenderDeviceId, peer, P2PResourceKind.FileTransfer),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string ValidateDestinationPath(string destinationPath, string requestedFileName)
+    {
+        var destination = Path.GetFullPath(destinationPath);
+        if (string.IsNullOrWhiteSpace(Path.GetFileName(destination))) throw new InvalidDataException("Destination file name is invalid.");
+        return destination;
+    }
+
+    private void Report(P2PDiagnosticKind kind, IPEndPoint? peer = null, string? message = null, Guid? transferId = null)
+        => Diagnostic?.Invoke(this, new P2PDiagnosticEventArgs(kind, peer, _options.SessionId, message, transferId));
 
     private sealed record FileMetadata(string FileName, long Length, string Sha256);
 }
