@@ -32,8 +32,7 @@ public sealed class RtpAudioIntegrationTests
 
     private static int GetFreePort()
     {
-        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var listener = new System.Net.Sockets.UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        return ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
     }
 }
