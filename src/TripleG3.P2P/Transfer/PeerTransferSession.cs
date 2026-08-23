@@ -580,8 +580,8 @@ internal sealed class PeerTransferSession : IPeerTransferSession
         }
 
         operation.MoveToStreaming();
-        await SendTransferOpenAcknowledgementAsync(frame.TransferId, decision, cancellationToken).ConfigureAwait(false);
         NotifyInboundTransferOpened(operation);
+        await SendTransferOpenAcknowledgementAsync(frame.TransferId, decision, cancellationToken).ConfigureAwait(false);
     }
 
     private void HandleTransferOpenAcknowledgement(PeerTransferFrame frame)
