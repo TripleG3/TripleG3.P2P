@@ -30,12 +30,12 @@ public class TcpIntegrationTests
 
         await a.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = portA,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, portB),
+            OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, portB)],
             SerializationProtocol = proto
         });
         await b.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = portB,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, portA),
+            OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, portA)],
             SerializationProtocol = proto
         });
 
@@ -60,7 +60,7 @@ public class TcpIntegrationTests
     [InlineData(SerializationProtocol.None)]
     [InlineData(SerializationProtocol.JsonRaw)]
     [InlineData(SerializationProtocol.LengthPrefixed)]
-    public async Task Tcp_Broadcast_FanOut(SerializationProtocol proto)
+    public async Task Tcp_FanOut(SerializationProtocol proto)
     {
         var basePort = PortAllocator.NextBlock();
         var hubPort = basePort;
@@ -78,18 +78,15 @@ public class TcpIntegrationTests
 
         await s1.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = s1Port,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, hubPort),
             SerializationProtocol = proto
         });
         await s2.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = s2Port,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, hubPort),
             SerializationProtocol = proto
         });
         await hub.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = hubPort,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, s1Port),
-            BroadcastEndPoints = [new IPEndPoint(IPAddress.Loopback, s2Port)],
+            OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, s1Port), new IPEndPoint(IPAddress.Loopback, s2Port)],
             SerializationProtocol = proto
         });
 
@@ -123,12 +120,11 @@ public class TcpIntegrationTests
 
         await recv.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = recvPort,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, senderPort),
             SerializationProtocol = proto
         });
         await sender.StartListeningAsync(new ProtocolConfiguration{
             LocalPort = senderPort,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, recvPort),
+            OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, recvPort)],
             SerializationProtocol = proto
         });
 

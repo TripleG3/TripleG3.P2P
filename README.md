@@ -37,7 +37,7 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 - Choice between ultra-light delimiter serialization or raw JSON
 - Safe, isolated subscriptions (late subscribers don't crash the loop)
 - Zero allocations for header parsing (Span/Memory friendly design internally)
-- NEW: Multi-endpoint broadcast fan-out with duplicate endpoint suppression
+- NEW: Multi-endpoint fan-out with duplicate endpoint suppression
 
 ---
 
@@ -48,7 +48,7 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 - Attribute ordered property serialization with stable delimiter `@-@`
 - Automatic Envelope wrapping so handlers receive strong types directly
 - Multiple simultaneous protocol instances via separate buses
-- Multi-endpoint broadcast (one `SendAsync` -> N peers)
+- Multi-endpoint fan-out (one `SendAsync` -> N peers)
 - Plug-in serializer model (`IMessageSerializer`)
 - Graceful cancellation / disposal
 - TCP transport (reliable stream) alongside UDP; same API
@@ -57,7 +57,7 @@ Typical networking layers force you to hand-roll framing, routing, and serializa
 
 ### Transport Summary
 
-| Transport | Reliability | Ordering | Broadcast Fan-Out | Status |
+| Transport | Reliability | Ordering | Fan-Out | Status |
 | --- | --- | --- | --- | --- |
 | UDP | Best effort / loss possible | Not guaranteed across datagrams | Yes (multi-endpoint send) | Implemented |
 | TCP | Reliable | Preserved per connection | Yes (writes to each stream) | Implemented |
@@ -150,8 +150,7 @@ Both built-in buses also implement `ISubscriptionSerialBus`, whose `Subscribe<T>
 ```csharp
 public sealed class ProtocolConfiguration {
     IPAddress LocalAddress { get; init; }
-    IPEndPoint RemoteEndPoint { get; init; }
-    IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; }
+    IReadOnlyCollection<IPEndPoint> OutboundEndPoints { get; init; }
     int        LocalPort      { get; init; }
     int        MaxPayloadBytes { get; init; }
     int        MaxInboundConnections { get; init; }
@@ -159,22 +158,22 @@ public sealed class ProtocolConfiguration {
 }
 ```
 
-Controls binding + outbound destination and the serialization protocol used for every message on this bus instance.
+Controls binding, outbound destinations, and the serialization protocol used for every message on this bus instance.
 
-#### Broadcasting / Fan-Out
+#### Outbound Destinations / Fan-Out
 
-Provide one or more `BroadcastEndPoints` to automatically fan out every `SendAsync` from a bus instance to: `RemoteEndPoint ∪ BroadcastEndPoints` (set semantics). Duplicate endpoints (same `address:port`) are suppressed.
+Configure `OutboundEndPoints` to fan out every `SendAsync` from a bus instance. The collection has set semantics: duplicate endpoints with the same `address:port` are suppressed. An empty collection creates a receive-only bus; `SendAsync` throws until at least one outbound endpoint is configured. These are configured unicast peers, not IP broadcast addresses.
 
 Basic one-to-many:
 
 ```csharp
 await bus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 7000,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 7001), // primary
-    BroadcastEndPoints = new [] {
+    OutboundEndPoints = [
+        new IPEndPoint(IPAddress.Loopback, 7001),
         new IPEndPoint(IPAddress.Loopback, 7002),
         new IPEndPoint(IPAddress.Loopback, 7003)
-    },
+    ],
     SerializationProtocol = SerializationProtocol.None
 });
 
@@ -187,40 +186,39 @@ Hub & Spokes (hub at 8000 -> spokes 8001/8002, spokes reply only to hub):
 // Hub
 await hub.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 8000,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 8001),
-    BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, 8002) },
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 8001), new IPEndPoint(IPAddress.Loopback, 8002)],
     SerializationProtocol = SerializationProtocol.JsonRaw
 });
 
 // Spoke 1
 await s1.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 8001,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 8000),
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 8000)],
     SerializationProtocol = SerializationProtocol.JsonRaw
 });
 
 // Spoke 2 (similar to s1; LocalPort = 8002)
 
-await hub.SendAsync(new BroadcastAnnouncement("server", "hello spokes"));
+await hub.SendAsync(new Announcement("server", "hello spokes"));
 ```
 
-Full Mesh (N peers each send to all others): create N buses where for each index `i` choose one peer as `RemoteEndPoint` and all remaining as `BroadcastEndPoints`. (See integration test `Concurrent_Broadcasts_All_Messages_Delivered_Exactly_Once`).
+Full Mesh (N peers each send to all others): create N buses where each bus configures every other peer in `OutboundEndPoints`. (See integration test `Concurrent_FanOuts_All_Messages_Delivered_Exactly_Once`).
 
 Duplicate endpoint suppression:
 
 ```csharp
 await bus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 8100,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 8101),
-    BroadcastEndPoints = new [] { // 8102 duplicated
+    OutboundEndPoints = [
+        new IPEndPoint(IPAddress.Loopback, 8101),
         new IPEndPoint(IPAddress.Loopback, 8102),
         new IPEndPoint(IPAddress.Loopback, 8102)
-    }
+    ]
 });
 // Only one datagram sent to 8102.
 ```
 
-Mixed types broadcast (string + complex):
+Mixed types fan-out (string + complex):
 
 ```csharp
 await sender.SendAsync("alpha");
@@ -309,7 +307,7 @@ public record Address([property: Udp(1)] string Street,
 var bus = SerialBusFactory.CreateUdp();
 await bus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 7000,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 7001),
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 7001)],
     SerializationProtocol = SerializationProtocol.None
 });
 
@@ -326,7 +324,7 @@ Run a second process with reversed ports (7001 <-> 7000) to complete the loop.
 var tcpBus = SerialBusFactory.CreateTcp();
 await tcpBus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 9000,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 9001),
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 9001)],
     SerializationProtocol = SerializationProtocol.JsonRaw
 });
 
@@ -339,8 +337,8 @@ await tcpBus.SendAsync(new Person("Alice", 28, new Address("1 Way", "Town", "ST"
 ```csharp
 var udp = SerialBusFactory.CreateUdp();
 var tcp = SerialBusFactory.CreateTcp();
-await udp.StartListeningAsync(new ProtocolConfiguration { LocalPort = 7000, RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 7001), SerializationProtocol = SerializationProtocol.None });
-await tcp.StartListeningAsync(new ProtocolConfiguration { LocalPort = 9000, RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 9001), SerializationProtocol = SerializationProtocol.JsonRaw });
+await udp.StartListeningAsync(new ProtocolConfiguration { LocalPort = 7000, OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 7001)], SerializationProtocol = SerializationProtocol.None });
+await tcp.StartListeningAsync(new ProtocolConfiguration { LocalPort = 9000, OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 9001)], SerializationProtocol = SerializationProtocol.JsonRaw });
 
 udp.SubscribeTo<Chat>(c => Console.WriteLine($"[UDP] {c.User}: {c.Text}"));
 tcp.SubscribeTo<Chat>(c => Console.WriteLine($"[TCP] {c.User}: {c.Text}"));
@@ -357,7 +355,7 @@ await tcp.SendAsync(new Chat("me","reliable"));
 var jsonBus = SerialBusFactory.CreateUdp();
 await jsonBus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 7002,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 7003),
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 7003)],
     SerializationProtocol = SerializationProtocol.JsonRaw
 });
 ```
@@ -474,7 +472,7 @@ Transport abstraction lives behind `ISerialBus`.
 
 ### TCP (Implemented)
 
-Use `SerialBusFactory.CreateTcp()` and the same `ProtocolConfiguration` (`LocalPort` is the listener; `RemoteEndPoint` and `BroadcastEndPoints` are configured send targets). Accepted sockets are receive-only sessions and are never added to fan-out. Ordering is preserved per configured connection, while different peers may progress independently.
+Use `SerialBusFactory.CreateTcp()` and the same `ProtocolConfiguration` (`LocalPort` is the listener; `OutboundEndPoints` are configured send targets). Accepted sockets are receive-only sessions and are never added to fan-out. Ordering is preserved per configured connection, while different peers may progress independently.
 
 Example:
 
@@ -482,8 +480,7 @@ Example:
 var tcpBus = SerialBusFactory.CreateTcp();
 await tcpBus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 9000,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 9001),
-    BroadcastEndPoints = new [] { new IPEndPoint(IPAddress.Loopback, 9002) },
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 9001), new IPEndPoint(IPAddress.Loopback, 9002)],
     SerializationProtocol = SerializationProtocol.JsonRaw
 });
 tcpBus.SubscribeTo<Chat>(c => Console.WriteLine($"[TCP] {c.User}: {c.Text}"));
@@ -499,7 +496,7 @@ Tests are split by execution contract:
 - `TripleG3.P2P.UnitTests` contains deterministic, in-process serializer, packetizer, depacketizer, cipher, sequence, bounds, and validation tests.
 - `TripleG3.P2P.IntegrationTests` contains loopback sockets, multi-peer fan-out, reconnect, malformed network input, receiver lifecycle, DI-over-UDP video, RTCP timing, and negotiation flows.
 
-The pull-request and publish pipelines currently restore, build, and run only the unit-test project. Integration tests bind local ports and use timing-sensitive multi-component flows, so run them locally before release validation.
+The pull-request pipeline restores, builds, and runs only the unit-test project for fast feedback. The main-branch release pipeline also runs integration tests, validates the packed package, and builds a clean package consumer. Integration tests bind local ports and use timing-sensitive multi-component flows, so run the full solution locally before a release.
 
 ```powershell
 # Pipeline-equivalent unit tests
@@ -514,9 +511,9 @@ dotnet test TripleG3.P2P.slnx -c Release -warnaserror
 
 The solution also contains the executable MCP server project. It is built by the solution but is not packed into `TripleG3.P2P`.
 
-The integration suite (`MultiBroadcastTests`, `TcpIntegrationTests`, `TransportHardeningTests`, and the video integration fixtures) proves:
+The integration suite (`MultiFanOutTests`, `TcpIntegrationTests`, `TransportHardeningTests`, and the video integration fixtures) proves:
 
-- UDP multi-endpoint broadcast
+- UDP multi-endpoint fan-out
 - TCP fan-out & ordering guarantees
 - Concurrent full-mesh delivery
 - Duplicate endpoint de-duplication
@@ -559,7 +556,7 @@ A: Receiver trusts the order defined by `[Udp(n)]`. Reordering is a breaking cha
 var bus = SerialBusFactory.CreateUdp();
 await bus.StartListeningAsync(new ProtocolConfiguration {
     LocalPort = 7000,
-    RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 7001),
+    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 7001)],
     SerializationProtocol = SerializationProtocol.None
 });
 
@@ -800,7 +797,7 @@ services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
 2. Accept an `IEnumerable<IMessageSerializer>`.
 3. Preserve the 8‑byte header (or version it explicitly).
 4. Provide a `SerialBusFactory.CreateX()` helper.
-5. Add integration tests: start, send, broadcast, mixed serializers.
+5. Add integration tests: start, send, fan-out, mixed serializers.
 6. Update README & bump minor version.
 
 ### MAUI Integration

@@ -107,7 +107,13 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             throw new ArgumentOutOfRangeException(nameof(messageType));
         }
 
-        var connectionFailures = await EnsureConnectionsAsync(config, cancellationToken).ConfigureAwait(false);
+        var endpoints = GetOutboundEndpoints(config);
+        if (endpoints.Count == 0)
+        {
+            throw new InvalidOperationException("No outbound endpoints are configured.");
+        }
+
+        var connectionFailures = await EnsureConnectionsAsync(endpoints, cancellationToken).ConfigureAwait(false);
         var body = serializer.Serialize(new Envelope<T>(GetProtocolTypeName(typeof(T)), message));
         if (body.Length > config.MaxPayloadBytes)
         {
@@ -136,7 +142,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             {
                 failures.Add(exception);
                 RemoveOutbound(target.Key, target.Value);
-                _logger.LogWarning(exception, "TCP send to {RemoteEndPoint} failed.", target.Key);
+                _logger.LogWarning(exception, "TCP send to {OutboundEndPoint} failed.", target.Key);
             }
         }
 
@@ -150,7 +156,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _logger.LogWarning(
                 "TCP broadcast completed partially: {Succeeded} of {Attempted} endpoints succeeded.",
                 successCount,
-                GetConfiguredEndpoints(config).Count);
+                endpoints.Count);
         }
     }
 
@@ -292,14 +298,14 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
     }
 
     private async Task<IReadOnlyCollection<Exception>> EnsureConnectionsAsync(
-        ProtocolConfiguration config,
+        IReadOnlyList<IPEndPoint> endpoints,
         CancellationToken cancellationToken)
     {
         var failures = new List<Exception>();
         await _connectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            foreach (var endpoint in GetConfiguredEndpoints(config))
+            foreach (var endpoint in endpoints)
             {
                 var key = endpoint.ToString();
                 if (_outboundConnections.TryGetValue(key, out var existing) && !existing.IsDisposed) continue;
@@ -329,7 +335,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
                     client.Dispose();
                     var failure = new IOException($"Could not connect to configured TCP endpoint {endpoint}.", exception);
                     failures.Add(failure);
-                    _logger.LogWarning(exception, "TCP connection to {RemoteEndPoint} failed.", endpoint);
+                    _logger.LogWarning(exception, "TCP connection to {OutboundEndPoint} failed.", endpoint);
                 }
             }
         }
@@ -463,9 +469,8 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         return attribute?.Name is { Length: > 0 } name ? name : type.Name;
     }
 
-    private static IReadOnlyList<IPEndPoint> GetConfiguredEndpoints(ProtocolConfiguration config)
-        => [.. new[] { config.RemoteEndPoint }
-            .Concat(config.BroadcastEndPoints)
+    private static IReadOnlyList<IPEndPoint> GetOutboundEndpoints(ProtocolConfiguration config)
+        => [.. config.OutboundEndPoints
             .DistinctBy(endpoint => endpoint.ToString(), StringComparer.Ordinal)];
 
     private void TrackReceiveTask(Task task)
@@ -494,7 +499,13 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
     private void ValidateConfiguration(ProtocolConfiguration config)
     {
         if (config.LocalPort is < 0 or > IPEndPoint.MaxPort) throw new ArgumentOutOfRangeException(nameof(config.LocalPort));
-        if (config.RemoteEndPoint.Port == 0) throw new ArgumentException("RemoteEndPoint must use a non-zero port.", nameof(config));
+        ArgumentNullException.ThrowIfNull(config.OutboundEndPoints);
+        foreach (var endpoint in config.OutboundEndPoints)
+        {
+            if (endpoint is null) throw new ArgumentException("OutboundEndPoints must not contain null values.", nameof(config));
+            if (endpoint.Port == 0) throw new ArgumentException("OutboundEndPoints must not contain endpoints that use port zero.", nameof(config));
+        }
+
         if (config.MaxPayloadBytes <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxPayloadBytes));
         if (config.MaxInboundConnections <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxInboundConnections));
         if (!_serializers.ContainsKey(config.SerializationProtocol))

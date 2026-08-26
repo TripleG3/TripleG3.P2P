@@ -113,10 +113,14 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         new UdpHeader(body.Length, (short)messageType, config.SerializationProtocol).Write(frame);
         body.CopyTo(frame.AsSpan(UdpHeader.Size));
 
-        var endpoints = new[] { config.RemoteEndPoint }
-            .Concat(config.BroadcastEndPoints)
+        var endpoints = config.OutboundEndPoints
             .DistinctBy(endpoint => endpoint.ToString(), StringComparer.Ordinal)
             .ToArray();
+        if (endpoints.Length == 0)
+        {
+            throw new InvalidOperationException("No outbound endpoints are configured.");
+        }
+
         var failures = new List<Exception>();
         var successCount = 0;
 
@@ -134,7 +138,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             catch (Exception exception) when (exception is SocketException or ObjectDisposedException or IOException)
             {
                 failures.Add(exception);
-                _logger.LogWarning(exception, "UDP send to {RemoteEndPoint} failed.", endpoint);
+                _logger.LogWarning(exception, "UDP send to {OutboundEndPoint} failed.", endpoint);
             }
         }
 
@@ -342,7 +346,13 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
     private void ValidateConfiguration(ProtocolConfiguration config)
     {
         if (config.LocalPort is < 0 or > IPEndPoint.MaxPort) throw new ArgumentOutOfRangeException(nameof(config.LocalPort));
-        if (config.RemoteEndPoint.Port == 0) throw new ArgumentException("RemoteEndPoint must use a non-zero port.", nameof(config));
+        ArgumentNullException.ThrowIfNull(config.OutboundEndPoints);
+        foreach (var endpoint in config.OutboundEndPoints)
+        {
+            if (endpoint is null) throw new ArgumentException("OutboundEndPoints must not contain null values.", nameof(config));
+            if (endpoint.Port == 0) throw new ArgumentException("OutboundEndPoints must not contain endpoints that use port zero.", nameof(config));
+        }
+
         if (config.MaxPayloadBytes <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxPayloadBytes));
         if (config.MaxInboundConnections <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxInboundConnections));
         if (!_serializers.ContainsKey(config.SerializationProtocol))

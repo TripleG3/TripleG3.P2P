@@ -4,8 +4,8 @@
 - 2026-07-15: Keep nullable reference types enabled and treat nullable warnings as errors in every project.
 - 2026-07-15: The repository and NuGet package use the `GPL-3.0-only` license expression.
 - 2026-07-15: Restore through the repository `NuGet.Config`; keep package versions centralized in `Directory.Packages.props`.
-- 2026-07-15: CI and publish workflows restore/build/test only `tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj`; never add integration tests to those pipelines.
-- 2026-07-15: Run `tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.csproj` manually for socket, timing, DI-over-UDP, and multi-component validation.
+- 2026-07-15: Pull-request CI restores, builds, and tests only `tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj` for fast feedback.
+- 2026-08-26: The main-branch release workflow runs both test projects in Release before packing or publishing.
 - 2026-07-15: Use `TripleG3.P2P.slnx` for complete local validation of both test tiers.
 - 2026-07-15: Preserve existing wire protocols for compatibility; introduce versioned protocol values for incompatible wire-format improvements.
 - 2026-07-15: Add focused regression tests for transport, serializer, and RTP behavior changes.
@@ -17,3 +17,5 @@
 - 2026-07-30: Alice-facing inbound transports use the host-provided `IPeerAuthorizer` before payload/file allocation; do not use endpoint identity as authorization.
 - 2026-07-30: File transfers require explicit receiver consent, stream to `.part`, verify SHA-256 before the final move, and report per-peer results and diagnostics.
 - 2026-07-30: Opus RTP is 48 kHz mono in 20 ms packets with a bounded receiver dispatch queue; preserve restartable `StartAsync`/`StopAsync` lifecycle.
+- 2026-08-26: Release builds, tests, packs, and validates one versioned artifact; validate its nuspec, assembly informational version, and clean package-consumer compilation before NuGet publication.
+- 2026-08-26: `ProtocolConfiguration.OutboundEndPoints` is the single configured outbound fan-out set; allow an empty collection for receive-only buses and make `SendAsync` fail clearly when no endpoints are configured.

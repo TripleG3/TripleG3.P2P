@@ -14,16 +14,11 @@ public sealed class ProtocolConfiguration
     public IPAddress LocalAddress { get; init; } = IPAddress.Any;
 
     /// <summary>
-    /// Remote peer endpoint to which outbound messages are sent.
+    /// Remote peer endpoints to which every outbound message is sent.
+    /// Duplicate endpoints are de-duplicated by endpoint string representation (address:port).
+    /// An empty collection creates a receive-only bus.
     /// </summary>
-    public required IPEndPoint RemoteEndPoint { get; init; }
-
-    /// <summary>
-    /// Optional additional endpoints that will also receive every outbound message (broadcast).
-    /// The <see cref="RemoteEndPoint"/> is always included implicitly; duplicates are de-duplicated
-    /// by endpoint string representation (address:port).
-    /// </summary>
-    public IReadOnlyCollection<IPEndPoint> BroadcastEndPoints { get; init; } = [];
+    public IReadOnlyCollection<IPEndPoint> OutboundEndPoints { get; init; } = [];
 
     /// <summary>
     /// Local UDP port to bind for inbound messages.

@@ -148,6 +148,30 @@ public sealed class TransportHardeningTests
     }
 
     [Fact]
+    public async Task ReceiveOnly_Buses_Start_And_Reject_Send()
+    {
+        var basePort = NextPortBlock();
+        var udp = SerialBusFactory.CreateUdp();
+        var tcp = SerialBusFactory.CreateTcp();
+
+        try
+        {
+            await udp.StartListeningAsync(CreateReceiveOnlyConfig(basePort));
+            await tcp.StartListeningAsync(CreateReceiveOnlyConfig(basePort + 1));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                udp.SendAsync(new SequenceMessage(1)).AsTask());
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                tcp.SendAsync(new SequenceMessage(1)).AsTask());
+        }
+        finally
+        {
+            await udp.CloseConnectionAsync();
+            await tcp.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task Udp_Malformed_Frame_Does_Not_Stop_Valid_Delivery()
     {
         var basePort = NextPortBlock();
@@ -225,7 +249,15 @@ public sealed class TransportHardeningTests
         {
             LocalAddress = IPAddress.Loopback,
             LocalPort = localPort,
-            RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, remotePort),
+            OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, remotePort)],
+            SerializationProtocol = SerializationProtocol.LengthPrefixed
+        };
+
+    private static ProtocolConfiguration CreateReceiveOnlyConfig(int localPort)
+        => new()
+        {
+            LocalAddress = IPAddress.Loopback,
+            LocalPort = localPort,
             SerializationProtocol = SerializationProtocol.LengthPrefixed
         };
 

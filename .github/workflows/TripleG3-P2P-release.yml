@@ -11,12 +11,13 @@ jobs:
   build-pack-publish:
     runs-on: windows-latest
     env:
+      SOLUTION_PATH: TripleG3.P2P.slnx
       PROJECT_PATH: src/TripleG3.P2P/TripleG3.P2P.csproj
       UNIT_TEST_PROJECT: tests/TripleG3.P2P.UnitTests/TripleG3.P2P.UnitTests.csproj
+      INTEGRATION_TEST_PROJECT: tests/TripleG3.P2P.IntegrationTests/TripleG3.P2P.IntegrationTests.csproj
+      ARTIFACTS_PATH: artifacts
+      TEST_RESULTS_PATH: TestResults
       NUGET_SOURCE: https://api.nuget.org/v3/index.json
-    defaults:
-      run:
-        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,81 +31,95 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore $UNIT_TEST_PROJECT
+        shell: pwsh
+        run: dotnet restore $env:SOLUTION_PATH
 
       - name: Compute Version (no file modification)
         id: version
         shell: pwsh
         run: |
-          [xml]$xml = Get-Content $env:PROJECT_PATH
-          $base = $xml.Project.PropertyGroup.Version
-          if (-not $base) { Write-Error 'Could not read <Version> from csproj'; exit 1 }
-          $parts = $base.Split('.')
-          if ($parts.Length -lt 2) { Write-Error "Unexpected version format: $base"; exit 1 }
-          $major = $parts[0]
-          $minor = $parts[1]
-          $patch = $env:GITHUB_RUN_NUMBER
-          $newVersion = "$major.$minor.$patch"
-          Write-Host "Resolved ephemeral package version: $newVersion (base $base)"
-          "version=$newVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          [xml]$project = Get-Content -LiteralPath $env:PROJECT_PATH
+          $baseVersion = [Version]$project.Project.PropertyGroup.Version
+          $version = "$($baseVersion.Major).$($baseVersion.Minor).$env:GITHUB_RUN_NUMBER"
+          Write-Host "Resolved release package version: $version (base $baseVersion)"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Build (Release)
-        run: dotnet build $UNIT_TEST_PROJECT -c Release -warnaserror -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} --no-restore
+      - name: Build package project (Release)
+        shell: pwsh
+        run: dotnet build $env:PROJECT_PATH -c Release --no-restore -warnaserror -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false -p:IncludeSourceRevisionInInformationalVersion=false -p:Version=${{ steps.version.outputs.version }}
 
-      - name: Unit Test (Release)
-        run: dotnet test $UNIT_TEST_PROJECT -c Release --no-build --no-restore -p:Version=${{ steps.version.outputs.version }} --logger "trx;LogFilePrefix=unit-release" --results-directory TestResults
+      - name: Build solution (Release)
+        shell: pwsh
+        run: dotnet build $env:SOLUTION_PATH -c Release --no-restore -warnaserror -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false -p:IncludeSourceRevisionInInformationalVersion=false -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Unit test (Release)
+        shell: pwsh
+        run: dotnet test $env:UNIT_TEST_PROJECT -c Release --no-build --no-restore --logger "trx;LogFilePrefix=unit-release" --results-directory $env:TEST_RESULTS_PATH
+
+      - name: Integration test (Release)
+        shell: pwsh
+        run: dotnet test $env:INTEGRATION_TEST_PROJECT -c Release --no-build --no-restore --logger "trx;LogFilePrefix=integration-release" --results-directory $env:TEST_RESULTS_PATH
+
+      - name: Prepare package artifacts
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath $env:ARTIFACTS_PATH) {
+            Remove-Item -LiteralPath $env:ARTIFACTS_PATH -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $env:ARTIFACTS_PATH | Out-Null
 
       - name: Pack
-        run: dotnet pack $PROJECT_PATH -c Release --no-build -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg -p:ContinuousIntegrationBuild=true -p:Version=${{ steps.version.outputs.version }} -o ./artifacts
+        shell: pwsh
+        run: dotnet pack $env:PROJECT_PATH -c Release --no-build --no-restore -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false -p:IncludeSourceRevisionInInformationalVersion=false -p:Version=${{ steps.version.outputs.version }} -o $env:ARTIFACTS_PATH
 
       - name: Validate package
         shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $package = Get-ChildItem artifacts -Filter *.nupkg | Select-Object -First 1
-          if (-not $package) { throw 'No NuGet package was produced.' }
-          $archive = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
-          try {
-            $entry = $archive.Entries | Where-Object FullName -Like '*.nuspec' | Select-Object -First 1
-            if (-not $entry) { throw 'Package does not contain a nuspec.' }
-            $reader = [System.IO.StreamReader]::new($entry.Open())
-            try { $manifest = [xml]$reader.ReadToEnd() } finally { $reader.Dispose() }
-            if ($manifest.package.metadata.license.'#text' -ne 'GPL-3.0-only') { throw 'Unexpected package license.' }
-            foreach ($required in @('README.md', 'LICENSE', 'lib/net10.0/TripleG3.P2P.dll')) {
-              if (-not ($archive.Entries.FullName -contains $required)) { throw "Package is missing $required." }
-            }
-          }
-          finally { $archive.Dispose() }
+        run: ./eng/Validate-ReleasePackage.ps1 -PackageDirectory $env:ARTIFACTS_PATH -ExpectedVersion '${{ steps.version.outputs.version }}'
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-unit-test-results
-          path: TestResults/*.trx
+          name: release-test-results
+          path: ${{ env.TEST_RESULTS_PATH }}/*.trx
+
+      - name: Upload package artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package-artifacts
+          path: ${{ env.ARTIFACTS_PATH }}/*
 
       - name: Push to NuGet.org
         if: success() && env.NUGET_SOURCE == 'https://api.nuget.org/v3/index.json'
+        shell: pwsh
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          if [ -z "$NUGET_API_KEY" ]; then
-            echo "NUGET_API_KEY secret not set; skipping push." >&2
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) {
+            Write-Warning 'NUGET_API_KEY secret not set; skipping push.'
             exit 0
-          fi
-          set -e
-          echo "Packages in artifacts directory:" >&2
-          ls -1 artifacts || true
-          for pkg in artifacts/*.nupkg; do
-            [ -f "$pkg" ] || continue
-            echo "Pushing $pkg" >&2
-            dotnet nuget push $pkg --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate --no-symbols
-          done
-          for sym in artifacts/*.snupkg; do
-            [ -f "$sym" ] || continue
-            echo "Pushing symbols $sym" >&2
-            dotnet nuget push $sym --api-key "$NUGET_API_KEY" --source $NUGET_SOURCE --skip-duplicate || true
-          done
+          }
+
+          $packages = @(Get-ChildItem -LiteralPath $env:ARTIFACTS_PATH -File -Filter '*.nupkg')
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one package to publish, found $($packages.Count)."
+          }
+
+          foreach ($package in $packages) {
+            dotnet nuget push $package.FullName --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate --no-symbols
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+          Get-ChildItem -LiteralPath $env:ARTIFACTS_PATH -File -Filter '*.snupkg' | ForEach-Object {
+            dotnet nuget push $_.FullName --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
 
   # NOTE: GitHub release creation intentionally removed. This workflow's
   # sole responsibility is to build, pack and push packages to NuGet.org.
