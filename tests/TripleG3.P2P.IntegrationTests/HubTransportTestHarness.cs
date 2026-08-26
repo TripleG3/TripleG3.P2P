@@ -32,8 +32,17 @@ internal sealed class HubTransportTestHarness : IAsyncDisposable
     }
 
     public async ValueTask PublishAsync(HubDispatch dispatch, CancellationToken cancellationToken = default)
+        => await PublishCoreAsync(dispatch.RecipientMemberIds, dispatch.Message, cancellationToken);
+
+    public async ValueTask PublishAsync<TMessage>(HubDispatch<TMessage> dispatch, CancellationToken cancellationToken = default)
+        => await PublishCoreAsync(dispatch.RecipientMemberIds, dispatch.Message, cancellationToken);
+
+    private async ValueTask PublishCoreAsync<TMessage>(
+        IReadOnlyList<Guid> recipientMemberIds,
+        TMessage message,
+        CancellationToken cancellationToken)
     {
-        foreach (var recipientMemberId in dispatch.RecipientMemberIds)
+        foreach (var recipientMemberId in recipientMemberIds)
         {
             if (!_sessions.TryGetValue(recipientMemberId, out var session))
             {
@@ -49,7 +58,7 @@ internal sealed class HubTransportTestHarness : IAsyncDisposable
                 OutboundEndPoints = [session.EndPoint],
                 SerializationProtocol = SerializationProtocol.LengthPrefixed
             }, cancellationToken);
-            await publisher.SendAsync(dispatch.Message, cancellationToken: cancellationToken);
+            await publisher.SendAsync(message, cancellationToken: cancellationToken);
         }
     }
 
@@ -93,6 +102,13 @@ internal sealed class HubTestMemberSession : IAsyncDisposable
     public IPEndPoint EndPoint { get; }
 
     public IReadOnlyCollection<HubChatMessage> Messages => _messages.ToArray();
+
+    public ConcurrentQueue<TMessage> Subscribe<TMessage>()
+    {
+        var messages = new ConcurrentQueue<TMessage>();
+        _bus.SubscribeTo<TMessage>(messages.Enqueue);
+        return messages;
+    }
 
     public Task WaitForMessageCountAsync(int expectedCount, int timeoutMilliseconds = 5000)
         => WaitForAsync(() => _messages.Count >= expectedCount, timeoutMilliseconds);

@@ -27,3 +27,5 @@
 - 2026-08-26: Use `IOutboundEndpointSerialBus` to update a running serial bus's destination set; configuration endpoints are startup seeds, and removing a TCP endpoint closes its outbound connection.
 - 2026-08-26: Hub services own authoritative identity, membership, roles, teams, notifications, and recipient routes above transport; hosts authenticate member IDs and publish returned routes separately.
 - 2026-08-26: Hub integration tests use dedicated recipient buses for exact UDP/TCP routing and real RTP audio receivers for team isolation; never test team routing by mutating one shared bus destination set.
+- 2026-08-26: Existing hubs route arbitrary non-null payloads through `HubDispatch<TMessage>`; generic payloads receive authoritative routing metadata and are not retained in text chat history by default.
+- 2026-08-26: `NotificationsHub` is an in-process device routing/projection service only; it preserves the full notification, provides Windows/Android/iOS views, and never calls external push providers.

@@ -1,5 +1,6 @@
 using System.Net;
 using TripleG3.P2P.Audio;
+using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
 using TripleG3.P2P.Hubs;
 using Xunit;
@@ -95,6 +96,37 @@ public sealed class GamingLobbyHubIntegrationTests
         }
     }
 
+    [Theory]
+    [MemberData(nameof(Transports))]
+    public async Task Custom_Team_Message_Is_Transported_Only_To_Authorized_Team_Members(string transport)
+    {
+        await using var harness = new HubTransportTestHarness(GetBusFactory(transport));
+        var host = Guid.NewGuid();
+        var redPlayer = Guid.NewGuid();
+        var bluePlayer = Guid.NewGuid();
+        var red = Guid.NewGuid();
+        var blue = Guid.NewGuid();
+        var lobby = BuildLobby(host, redPlayer, bluePlayer, red, blue);
+        var hostSession = await harness.AddMemberAsync(host);
+        var redSession = await harness.AddMemberAsync(redPlayer);
+        var blueSession = await harness.AddMemberAsync(bluePlayer);
+        var hostMessages = hostSession.Subscribe<PlayerPosition>();
+        var redMessages = redSession.Subscribe<PlayerPosition>();
+        var blueMessages = blueSession.Subscribe<PlayerPosition>();
+
+        var dispatch = lobby.RouteMessage(redPlayer, HubAudience.Team, red, new PlayerPosition(10, 20));
+        await harness.PublishAsync(dispatch);
+        await WaitForAsync(() => hostMessages.Count == 1);
+        await Task.Delay(150);
+
+        Assert.Empty(redMessages);
+        Assert.Empty(blueMessages);
+        var delivered = Assert.Single(hostMessages);
+        Assert.Equal(10, delivered.X);
+        Assert.Equal(20, delivered.Y);
+        Assert.Empty(lobby.Snapshot.Messages);
+    }
+
     private static GamingLobbyHub BuildLobby(Guid host, Guid redPlayer, Guid bluePlayer, Guid red, Guid blue)
     {
         var lobby = new GamingLobbyHub(Guid.NewGuid(), host, "Host");
@@ -121,6 +153,23 @@ public sealed class GamingLobbyHubIntegrationTests
         using var client = new System.Net.Sockets.UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         return ((IPEndPoint)client.Client.LocalEndPoint!).Port;
     }
+
+    private static async Task WaitForAsync(Func<bool> condition, int timeoutMilliseconds = 5000)
+    {
+        var started = Environment.TickCount64;
+        while (Environment.TickCount64 - started < timeoutMilliseconds)
+        {
+            if (condition()) return;
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("Expected custom gaming message was not delivered before timeout.");
+    }
+
+    [P2PMessage("PlayerPosition")]
+    public sealed record PlayerPosition(
+        [property: P2PProperty(1)] int X,
+        [property: P2PProperty(2)] int Y);
 
     private sealed class AudioReceiverSession : IAsyncDisposable
     {

@@ -28,6 +28,8 @@ public interface IGamingLobbyHub
 
     HubDispatch SendChat(Guid senderMemberId, HubAudience audience, Guid teamId, string text);
 
+    HubDispatch<TMessage> RouteMessage<TMessage>(Guid senderMemberId, HubAudience audience, Guid teamId, TMessage message);
+
     HubAudioRoute GetAudioRoute(Guid senderMemberId, HubAudience audience, Guid teamId);
 
     bool IsAudioRouteCurrent(HubAudioRoute route);

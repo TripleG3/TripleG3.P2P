@@ -1,4 +1,5 @@
 using TripleG3.P2P.Hubs;
+using TripleG3.P2P.Attributes;
 using Xunit;
 
 namespace TripleG3.P2P.UnitTests;
@@ -84,6 +85,26 @@ public sealed class GamingLobbyHubTests
         Assert.Throws<InvalidOperationException>(() => hub.GetAudioRoute(redPlayer, HubAudience.Team, red));
     }
 
+    [Fact]
+    public void Generic_Team_Message_Is_Routed_Only_To_The_Senders_Team_And_Not_Retained()
+    {
+        var host = Guid.NewGuid();
+        var redPlayer = Guid.NewGuid();
+        var bluePlayer = Guid.NewGuid();
+        var red = Guid.NewGuid();
+        var blue = Guid.NewGuid();
+        var hub = BuildPopulatedLobby(host, redPlayer, bluePlayer, red, blue);
+
+        var dispatch = hub.RouteMessage(redPlayer, HubAudience.Team, red, new PlayerPosition(10, 20));
+
+        Assert.Equal([host], dispatch.RecipientMemberIds);
+        Assert.Equal(red, dispatch.TeamId);
+        Assert.Equal(HubAudience.Team, dispatch.Audience);
+        Assert.Empty(hub.Snapshot.Messages);
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            hub.RouteMessage(redPlayer, HubAudience.Team, blue, new PlayerPosition(30, 40)));
+    }
+
     private static GamingLobbyHub BuildPopulatedLobby(Guid host, Guid redPlayer, Guid bluePlayer, Guid red, Guid blue)
     {
         var hub = new GamingLobbyHub(Guid.NewGuid(), host, "Host");
@@ -96,4 +117,9 @@ public sealed class GamingLobbyHubTests
         hub.AssignMemberToTeam(host, bluePlayer, blue);
         return hub;
     }
+
+    [P2PMessage("PlayerPosition")]
+    public sealed record PlayerPosition(
+        [property: P2PProperty(1)] int X,
+        [property: P2PProperty(2)] int Y);
 }

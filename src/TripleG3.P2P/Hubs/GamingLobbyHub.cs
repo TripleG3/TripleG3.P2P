@@ -258,6 +258,41 @@ public sealed class GamingLobbyHub : IGamingLobbyHub
         return dispatch;
     }
 
+    public HubDispatch<TMessage> RouteMessage<TMessage>(
+        Guid senderMemberId,
+        HubAudience audience,
+        Guid teamId,
+        TMessage message)
+    {
+        HubValidation.ValidateId(senderMemberId, nameof(senderMemberId));
+        ArgumentNullException.ThrowIfNull(message);
+        GamingLobbySnapshot changed;
+        HubDispatch<TMessage> dispatch;
+        lock (_gate)
+        {
+            var current = _snapshot;
+            var sender = GetMember(current, senderMemberId);
+            var recipients = GetRecipients(current, sender, audience, teamId);
+            var routedTeamId = audience == HubAudience.Team ? sender.TeamId : Guid.Empty;
+            var nextRevision = current.Revision + 1;
+            changed = current with { Revision = nextRevision };
+            dispatch = new HubDispatch<TMessage>(
+                new HubDispatchMetadata(
+                    current.LobbyId,
+                    nextRevision,
+                    senderMemberId,
+                    audience,
+                    routedTeamId,
+                    _timeProvider.GetUtcNow()),
+                message,
+                recipients);
+            Volatile.Write(ref _snapshot, changed);
+        }
+
+        PublishStateChanged(changed);
+        return dispatch;
+    }
+
     public HubAudioRoute GetAudioRoute(Guid senderMemberId, HubAudience audience, Guid teamId)
     {
         lock (_gate)

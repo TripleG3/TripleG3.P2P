@@ -1,5 +1,6 @@
 using TripleG3.P2P.Core;
 using TripleG3.P2P.Hubs;
+using TripleG3.P2P.Attributes;
 using Xunit;
 
 namespace TripleG3.P2P.IntegrationTests;
@@ -71,6 +72,31 @@ public sealed class ChatHubIntegrationTests
         Assert.Equal(firstMember, Assert.Single(hub.Snapshot.Members, member => member.Role == HubMemberRole.Host && member.MemberId != host).MemberId);
     }
 
+    [Theory]
+    [MemberData(nameof(Transports))]
+    public async Task Ownerless_Chat_Routes_A_Custom_Message_Type_Over_Transport(string transport)
+    {
+        await using var harness = new HubTransportTestHarness(GetBusFactory(transport));
+        var hub = new ChatHub(Guid.NewGuid());
+        var sender = Guid.NewGuid();
+        var recipient = Guid.NewGuid();
+        var senderSession = await harness.AddMemberAsync(sender);
+        var recipientSession = await harness.AddMemberAsync(recipient);
+        var senderMessages = senderSession.Subscribe<TypingIndicator>();
+        var recipientMessages = recipientSession.Subscribe<TypingIndicator>();
+        hub.Join(sender, "Sender");
+        hub.Join(recipient, "Recipient");
+
+        var dispatch = hub.RouteMessage(sender, new TypingIndicator(true));
+        await harness.PublishAsync(dispatch);
+        await WaitForAsync(() => recipientMessages.Count == 1);
+
+        Assert.Empty(senderMessages);
+        Assert.True(Assert.Single(recipientMessages).IsTyping);
+        Assert.Empty(hub.Snapshot.Messages);
+        Assert.Equal(hub.Snapshot.Revision, dispatch.Revision);
+    }
+
     private static Func<ISerialBus> GetBusFactory(string transport)
         => transport switch
         {
@@ -78,4 +104,19 @@ public sealed class ChatHubIntegrationTests
             "tcp" => SerialBusFactory.CreateTcp,
             _ => throw new ArgumentOutOfRangeException(nameof(transport))
         };
+
+    private static async Task WaitForAsync(Func<bool> condition, int timeoutMilliseconds = 5000)
+    {
+        var started = Environment.TickCount64;
+        while (Environment.TickCount64 - started < timeoutMilliseconds)
+        {
+            if (condition()) return;
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("Expected custom hub message was not delivered before timeout.");
+    }
+
+    [P2PMessage("TypingIndicator")]
+    public sealed record TypingIndicator([property: P2PProperty(1)] bool IsTyping);
 }

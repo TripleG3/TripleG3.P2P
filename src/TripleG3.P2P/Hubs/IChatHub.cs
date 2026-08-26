@@ -7,4 +7,6 @@ public interface IChatHub
     event EventHandler<HubStateChangedEventArgs<ChatHubSnapshot>>? StateChanged;
 
     HubDispatch SendMessage(Guid senderMemberId, string text);
+
+    HubDispatch<TMessage> RouteMessage<TMessage>(Guid senderMemberId, TMessage message);
 }

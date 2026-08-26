@@ -1,4 +1,5 @@
 using TripleG3.P2P.Hubs;
+using TripleG3.P2P.Attributes;
 using Xunit;
 
 namespace TripleG3.P2P.UnitTests;
@@ -67,4 +68,40 @@ public sealed class ChatHubTests
         Assert.Equal(50, hub.Snapshot.MemberCount);
         Assert.Equal(50, hub.Snapshot.Revision);
     }
+
+    [Fact]
+    public void Generic_Message_Uses_Authoritative_Metadata_Without_Entering_Chat_History()
+    {
+        var hubId = Guid.NewGuid();
+        var sender = Guid.NewGuid();
+        var recipient = Guid.NewGuid();
+        var hub = new ChatHub(hubId);
+        hub.Join(sender, "Sender");
+        hub.Join(recipient, "Recipient");
+
+        var dispatch = hub.RouteMessage(sender, new PlayerReady(true));
+
+        Assert.Equal(hubId, dispatch.HubId);
+        Assert.Equal(sender, dispatch.SenderMemberId);
+        Assert.Equal(HubAudience.All, dispatch.Audience);
+        Assert.Equal(Guid.Empty, dispatch.TeamId);
+        Assert.Equal([recipient], dispatch.RecipientMemberIds);
+        Assert.True(dispatch.Message.IsReady);
+        Assert.Empty(hub.Snapshot.Messages);
+        Assert.Equal(hub.Snapshot.Revision, dispatch.Revision);
+    }
+
+    [Fact]
+    public void Generic_Message_Rejects_Null_And_Nonmember_Senders()
+    {
+        var hub = new ChatHub(Guid.NewGuid());
+        var member = Guid.NewGuid();
+        hub.Join(member, "Member");
+
+        Assert.Throws<ArgumentNullException>(() => hub.RouteMessage<string>(member, null!));
+        Assert.Throws<KeyNotFoundException>(() => hub.RouteMessage(Guid.NewGuid(), new PlayerReady(true)));
+    }
+
+    [P2PMessage("PlayerReady")]
+    public sealed record PlayerReady([property: P2PProperty(1)] bool IsReady);
 }

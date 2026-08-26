@@ -130,6 +130,35 @@ public sealed class HostedChatHub : IHostedChatHub
         return dispatch;
     }
 
+    public HubDispatch<TMessage> RouteMessage<TMessage>(Guid senderMemberId, TMessage message)
+    {
+        HubValidation.ValidateId(senderMemberId, nameof(senderMemberId));
+        ArgumentNullException.ThrowIfNull(message);
+        ChatHubSnapshot changed;
+        HubDispatch<TMessage> dispatch;
+        lock (_gate)
+        {
+            var current = _snapshot;
+            _ = GetMember(current, senderMemberId);
+            var nextRevision = current.Revision + 1;
+            changed = current with { Revision = nextRevision };
+            dispatch = new HubDispatch<TMessage>(
+                new HubDispatchMetadata(
+                    current.HubId,
+                    nextRevision,
+                    senderMemberId,
+                    HubAudience.All,
+                    Guid.Empty,
+                    _timeProvider.GetUtcNow()),
+                message,
+                HubValidation.Snapshot(current.Members.Where(member => member.MemberId != senderMemberId).Select(member => member.MemberId)));
+            Volatile.Write(ref _snapshot, changed);
+        }
+
+        PublishStateChanged(changed);
+        return dispatch;
+    }
+
     private ChatHubSnapshot ChangeRole(
         Guid requesterMemberId,
         Guid memberId,

@@ -8,6 +8,8 @@ public interface IHubCatalog
 
     IReadOnlyCollection<Guid> GamingLobbyIds { get; }
 
+    IReadOnlyCollection<Guid> NotificationsHubIds { get; }
+
     ChatHub CreateChatHub(Guid hubId, HubOptions? options = null);
 
     HostedChatHub CreateHostedChatHub(
@@ -22,15 +24,21 @@ public interface IHubCatalog
         string initialHostUsername,
         HubOptions? options = null);
 
+    NotificationsHub CreateNotificationsHub(Guid hubId, NotificationsHubOptions? options = null);
+
     bool TryGetChatHub(Guid hubId, out ChatHub? hub);
 
     bool TryGetHostedChatHub(Guid hubId, out HostedChatHub? hub);
 
     bool TryGetGamingLobby(Guid lobbyId, out GamingLobbyHub? hub);
 
+    bool TryGetNotificationsHub(Guid hubId, out NotificationsHub? hub);
+
     bool RemoveChatHub(Guid hubId, ChatHub expectedHub);
 
     bool RemoveHostedChatHub(Guid hubId, HostedChatHub expectedHub);
 
     bool RemoveGamingLobby(Guid lobbyId, GamingLobbyHub expectedLobby);
+
+    bool RemoveNotificationsHub(Guid hubId, NotificationsHub expectedHub);
 }

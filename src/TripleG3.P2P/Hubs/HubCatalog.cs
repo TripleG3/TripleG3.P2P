@@ -9,6 +9,7 @@ public sealed class HubCatalog : IHubCatalog
     private readonly ConcurrentDictionary<Guid, ChatHub> _chatHubs = new();
     private readonly ConcurrentDictionary<Guid, HostedChatHub> _hostedChatHubs = new();
     private readonly ConcurrentDictionary<Guid, GamingLobbyHub> _gamingLobbies = new();
+    private readonly ConcurrentDictionary<Guid, NotificationsHub> _notificationsHubs = new();
     private readonly TimeProvider _timeProvider;
     private readonly ILoggerFactory _loggerFactory;
 
@@ -23,6 +24,8 @@ public sealed class HubCatalog : IHubCatalog
     public IReadOnlyCollection<Guid> HostedChatHubIds => Array.AsReadOnly(_hostedChatHubs.Keys.Order().ToArray());
 
     public IReadOnlyCollection<Guid> GamingLobbyIds => Array.AsReadOnly(_gamingLobbies.Keys.Order().ToArray());
+
+    public IReadOnlyCollection<Guid> NotificationsHubIds => Array.AsReadOnly(_notificationsHubs.Keys.Order().ToArray());
 
     public ChatHub CreateChatHub(Guid hubId, HubOptions? options = null)
     {
@@ -65,11 +68,25 @@ public sealed class HubCatalog : IHubCatalog
         return hub;
     }
 
+    public NotificationsHub CreateNotificationsHub(Guid hubId, NotificationsHubOptions? options = null)
+    {
+        var hub = new NotificationsHub(
+            hubId,
+            options,
+            _timeProvider,
+            new DefaultNotificationProjector(),
+            _loggerFactory.CreateLogger<NotificationsHub>());
+        if (!_notificationsHubs.TryAdd(hubId, hub)) throw new InvalidOperationException($"Notifications hub {hubId} already exists.");
+        return hub;
+    }
+
     public bool TryGetChatHub(Guid hubId, out ChatHub? hub) => _chatHubs.TryGetValue(hubId, out hub);
 
     public bool TryGetHostedChatHub(Guid hubId, out HostedChatHub? hub) => _hostedChatHubs.TryGetValue(hubId, out hub);
 
     public bool TryGetGamingLobby(Guid lobbyId, out GamingLobbyHub? hub) => _gamingLobbies.TryGetValue(lobbyId, out hub);
+
+    public bool TryGetNotificationsHub(Guid hubId, out NotificationsHub? hub) => _notificationsHubs.TryGetValue(hubId, out hub);
 
     public bool RemoveChatHub(Guid hubId, ChatHub expectedHub)
         => ((ICollection<KeyValuePair<Guid, ChatHub>>)_chatHubs).Remove(new KeyValuePair<Guid, ChatHub>(hubId, expectedHub));
@@ -79,4 +96,7 @@ public sealed class HubCatalog : IHubCatalog
 
     public bool RemoveGamingLobby(Guid lobbyId, GamingLobbyHub expectedLobby)
         => ((ICollection<KeyValuePair<Guid, GamingLobbyHub>>)_gamingLobbies).Remove(new KeyValuePair<Guid, GamingLobbyHub>(lobbyId, expectedLobby));
+
+    public bool RemoveNotificationsHub(Guid hubId, NotificationsHub expectedHub)
+        => ((ICollection<KeyValuePair<Guid, NotificationsHub>>)_notificationsHubs).Remove(new KeyValuePair<Guid, NotificationsHub>(hubId, expectedHub));
 }

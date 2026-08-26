@@ -170,10 +170,20 @@ var hub = catalog.CreateChatHub(Guid.NewGuid());
 var memberId = Guid.NewGuid();
 hub.Join(memberId, "PackageConsumer");
 var dispatch = hub.SendMessage(memberId, "ready");
-Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}:{dispatch.Revision}");
+var customDispatch = hub.RouteMessage(memberId, new PackageConsumerEvent(true));
+var notifications = catalog.CreateNotificationsHub(Guid.NewGuid());
+var device = notifications.RegisterDevice(Guid.NewGuid(), memberId, NotificationPlatform.Android, "en-US");
+var notificationDispatch = notifications.Route(
+    new NotificationRequest("Ready", "Open the app."),
+    NotificationRecipient.ForDevices(device.DeviceId));
+var wireDelivery = notificationDispatch.Deliveries[0].ToWireDelivery();
+Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}:{dispatch.Revision}:{customDispatch.Revision}:{wireDelivery.Platform}");
 
 [P2PMessage("PackageConsumerMessage")]
 public sealed record PackageConsumerMessage([property: P2PProperty(1)] string Text);
+
+[P2PMessage("PackageConsumerEvent")]
+public sealed record PackageConsumerEvent([property: P2PProperty(1)] bool Enabled);
 "@)
 
     Invoke-Dotnet -Arguments @('restore', $consumerProject, '--configfile', $consumerNuGetConfig)

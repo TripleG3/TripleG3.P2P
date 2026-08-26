@@ -431,6 +431,81 @@ HubDispatch chat = lobby.SendChat(player, HubAudience.Team, red, "Ready");
 HubAudioRoute audio = lobby.GetAudioRoute(player, HubAudience.Team, red);
 ```
 
+### Custom hub messages
+
+The existing hubs can route any user-defined payload type without creating a generic hub class. The
+hub supplies authoritative sender, audience, team, timestamp, revision, recipients, and hub ID in
+`HubDispatch<TMessage>`; the custom payload cannot override those values.
+
+```csharp
+[P2PMessage("PlayerReady")]
+public sealed record PlayerReady(
+    [property: P2PProperty(1)] bool IsReady);
+
+HubDispatch<PlayerReady> dispatch = lobby.RouteMessage(
+    player,
+    HubAudience.Team,
+    red,
+    new PlayerReady(true));
+```
+
+Ownerless and hosted chat hubs provide the simpler all-room overload:
+
+```csharp
+HubDispatch<TypingIndicator> dispatch = room.RouteMessage(
+    alice,
+    new TypingIndicator(true));
+```
+
+Custom payloads are not retained in chat history by default. Applications may selectively persist
+them, then publish `dispatch.Message` to the authenticated sessions identified by
+`dispatch.RecipientMemberIds`. Payload types should use `[P2PMessage]` and `[P2PProperty]` when sent
+through `ISerialBus`.
+
+### Notifications hub
+
+`NotificationsHub` registers local device profiles and routes a full platform-neutral notification to
+zero or more users, devices, or platforms. Every `NotificationDelivery` retains the full
+`NotificationMessage` and includes a typed Windows, Android, or iOS projection. It does not call
+Firebase, Apple Push Notification service, Windows App SDK, or Azure Notification Hubs.
+
+```csharp
+var notifications = catalog.CreateNotificationsHub(Guid.NewGuid());
+var device = notifications.RegisterDevice(
+    Guid.NewGuid(),
+    alice,
+    NotificationPlatform.Android,
+    "en-US");
+
+NotificationDispatch dispatch = notifications.Route(
+    new NotificationRequest(
+        "Match ready",
+        "Open the game.",
+        Category: "game",
+        Data:
+        [
+            new NotificationDataEntry("androidChannelId", "matches"),
+            new NotificationDataEntry("androidSmallIcon", "ic_match")
+        ]),
+    NotificationRecipient.ForDevices(device.DeviceId));
+```
+
+For delivery through `ISerialBus`, convert each result to `NotificationWireDelivery`. Receiving code
+can read either representation:
+
+```csharp
+NotificationWireDelivery wire = dispatch.Deliveries[0].ToWireDelivery();
+NotificationMessage full = wire.ReadNotification();
+AndroidNotificationView android = wire.ReadPlatformView<AndroidNotificationView>();
+```
+
+The platform views are application-facing data models only. Device code decides how to display them
+with the relevant operating-system APIs.
+
+Only trusted host code should register or remove devices and create recipient selectors. The host must
+authorize user and device identifiers before invoking `NotificationsHub`; payload-provided identities
+are not trusted.
+
 Register the process-wide catalog with dependency injection:
 
 ```csharp
@@ -917,6 +992,7 @@ The integration suite (`MultiFanOutTests`, `TcpIntegrationTests`, `TransportHard
 - Ownerless and hosted chat routing over real UDP and TCP sockets
 - Gaming all-lobby and team-only chat isolation over real UDP and TCP sockets
 - Gaming team-only RTP audio delivery and stale route invalidation
+- Notification user/device/platform routing and full/platform-specific parsing over UDP and TCP
 - Receiver start/stop/restart and disposal races
 - RTCP timing and negotiation/keyframe signaling
 
