@@ -15,7 +15,7 @@ namespace TripleG3.P2P.Tcp;
 /// <summary>
 /// TCP serial bus. Accepted sockets are receive-only sessions; outbound data is sent only to configured endpoints.
 /// </summary>
-public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDisposable
+public sealed class TcpSerialBus : ISubscriptionSerialBus, IOutboundEndpointSerialBus, IDisposable, IAsyncDisposable
 {
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
@@ -24,6 +24,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
     private readonly ConcurrentDictionary<string, (Guid Id, Type Type, Delegate Handler)[]> _subscriptions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TcpConnection> _outboundConnections = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<long, TcpConnection> _inboundConnections = new();
+    private readonly OutboundEndpointSet _outboundEndpoints = new();
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly object _lifecycleGate = new();
     private readonly object _receiveTasksGate = new();
@@ -51,6 +52,38 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
 
     public bool IsListening => Volatile.Read(ref _listener) is not null;
 
+    public IReadOnlyCollection<IPEndPoint> OutboundEndPoints => _outboundEndpoints.Endpoints;
+
+    public bool AddOutboundEndPoint(IPEndPoint endpoint)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        lock (_lifecycleGate)
+        {
+            if (_listener is null) throw new InvalidOperationException("Not listening. Call StartListeningAsync first.");
+            return _outboundEndpoints.Add(endpoint);
+        }
+    }
+
+    public bool RemoveOutboundEndPoint(IPEndPoint endpoint)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        TcpConnection? connection = null;
+        var removed = false;
+
+        lock (_lifecycleGate)
+        {
+            if (_listener is null) throw new InvalidOperationException("Not listening. Call StartListeningAsync first.");
+            removed = _outboundEndpoints.Remove(endpoint);
+            if (removed)
+            {
+                _outboundConnections.TryGetValue(OutboundEndpointSet.GetKey(endpoint), out connection);
+            }
+        }
+
+        if (connection is not null) RemoveOutbound(connection.Key, connection);
+        return removed;
+    }
+
     public ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -63,6 +96,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (_listener is not null) return ValueTask.CompletedTask;
 
+            _outboundEndpoints.Replace(config.OutboundEndPoints);
             _config = config;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _listener = new TcpListener(config.LocalAddress, config.LocalPort);
@@ -107,12 +141,13 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             throw new ArgumentOutOfRangeException(nameof(messageType));
         }
 
-        var endpoints = GetOutboundEndpoints(config);
-        if (endpoints.Count == 0)
+        var endpoints = _outboundEndpoints.GetSnapshot();
+        if (endpoints.Length == 0)
         {
             throw new InvalidOperationException("No outbound endpoints are configured.");
         }
 
+        RemoveUnconfiguredOutboundConnections(endpoints);
         var connectionFailures = await EnsureConnectionsAsync(endpoints, cancellationToken).ConfigureAwait(false);
         var body = serializer.Serialize(new Envelope<T>(GetProtocolTypeName(typeof(T)), message));
         if (body.Length > config.MaxPayloadBytes)
@@ -126,7 +161,8 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
 
         var failures = new List<Exception>(connectionFailures);
         var successCount = 0;
-        var targets = _outboundConnections.ToArray();
+        var endpointKeys = endpoints.Select(OutboundEndpointSet.GetKey).ToHashSet(StringComparer.Ordinal);
+        var targets = _outboundConnections.Where(connection => endpointKeys.Contains(connection.Key)).ToArray();
         foreach (var target in targets)
         {
             try
@@ -156,7 +192,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _logger.LogWarning(
                 "TCP broadcast completed partially: {Succeeded} of {Attempted} endpoints succeeded.",
                 successCount,
-                endpoints.Count);
+                endpoints.Length);
         }
     }
 
@@ -177,6 +213,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _outboundEndpoints.Clear();
         _subscriptions.Clear();
         if (listener is null) return;
         cts?.Cancel();
@@ -226,6 +263,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _outboundEndpoints.Clear();
         _subscriptions.Clear();
         cts?.Cancel();
         listener?.Stop();
@@ -307,7 +345,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         {
             foreach (var endpoint in endpoints)
             {
-                var key = endpoint.ToString();
+                var key = OutboundEndpointSet.GetKey(endpoint);
                 if (_outboundConnections.TryGetValue(key, out var existing) && !existing.IsDisposed) continue;
                 if (existing is not null) RemoveOutbound(key, existing);
 
@@ -316,7 +354,8 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
                 {
                     await client.ConnectAsync(endpoint.Address, endpoint.Port, cancellationToken).ConfigureAwait(false);
                     var connection = new TcpConnection(key, client);
-                    if (_outboundConnections.TryAdd(key, connection))
+                    if (_outboundEndpoints.GetSnapshot().Any(configured => string.Equals(OutboundEndpointSet.GetKey(configured), key, StringComparison.Ordinal))
+                        && _outboundConnections.TryAdd(key, connection))
                     {
                         TrackReceiveTask(ReceiveLoopAsync(connection, cancellationToken, () => RemoveOutbound(key, connection)));
                     }
@@ -469,9 +508,14 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         return attribute?.Name is { Length: > 0 } name ? name : type.Name;
     }
 
-    private static IReadOnlyList<IPEndPoint> GetOutboundEndpoints(ProtocolConfiguration config)
-        => [.. config.OutboundEndPoints
-            .DistinctBy(endpoint => endpoint.ToString(), StringComparer.Ordinal)];
+    private void RemoveUnconfiguredOutboundConnections(IReadOnlyCollection<IPEndPoint> endpoints)
+    {
+        var endpointKeys = endpoints.Select(OutboundEndpointSet.GetKey).ToHashSet(StringComparer.Ordinal);
+        foreach (var connection in _outboundConnections.ToArray())
+        {
+            if (!endpointKeys.Contains(connection.Key)) RemoveOutbound(connection.Key, connection.Value);
+        }
+    }
 
     private void TrackReceiveTask(Task task)
     {
@@ -502,8 +546,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         ArgumentNullException.ThrowIfNull(config.OutboundEndPoints);
         foreach (var endpoint in config.OutboundEndPoints)
         {
-            if (endpoint is null) throw new ArgumentException("OutboundEndPoints must not contain null values.", nameof(config));
-            if (endpoint.Port == 0) throw new ArgumentException("OutboundEndPoints must not contain endpoints that use port zero.", nameof(config));
+            OutboundEndpointSet.Validate(endpoint, nameof(config));
         }
 
         if (config.MaxPayloadBytes <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxPayloadBytes));

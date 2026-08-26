@@ -14,9 +14,10 @@ public sealed class ProtocolConfiguration
     public IPAddress LocalAddress { get; init; } = IPAddress.Any;
 
     /// <summary>
-    /// Remote peer endpoints to which every outbound message is sent.
+    /// Initial remote peer endpoints to which every outbound message is sent.
     /// Duplicate endpoints are de-duplicated by endpoint string representation (address:port).
     /// An empty collection creates a receive-only bus.
+    /// Use <see cref="IOutboundEndpointSerialBus"/> to change endpoints while listening.
     /// </summary>
     public IReadOnlyCollection<IPEndPoint> OutboundEndPoints { get; init; } = [];
 

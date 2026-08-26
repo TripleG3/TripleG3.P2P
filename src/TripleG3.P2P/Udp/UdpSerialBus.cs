@@ -15,13 +15,14 @@ namespace TripleG3.P2P.Udp;
 /// <summary>
 /// UDP implementation of <see cref="ISerialBus"/> with strict frame validation and configurable fan-out.
 /// </summary>
-public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDisposable
+public sealed class UdpSerialBus : ISubscriptionSerialBus, IOutboundEndpointSerialBus, IDisposable, IAsyncDisposable
 {
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     private readonly IReadOnlyDictionary<SerializationProtocol, IMessageSerializer> _serializers;
     private readonly ILogger<UdpSerialBus> _logger;
     private readonly ConcurrentDictionary<string, (Guid Id, Type Type, Delegate Handler)[]> _subscriptions = new(StringComparer.Ordinal);
+    private readonly OutboundEndpointSet _outboundEndpoints = new();
     private readonly object _lifecycleGate = new();
 
     private UdpClient? _udpClient;
@@ -45,6 +46,28 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
 
     public bool IsListening => Volatile.Read(ref _udpClient) is not null;
 
+    public IReadOnlyCollection<IPEndPoint> OutboundEndPoints => _outboundEndpoints.Endpoints;
+
+    public bool AddOutboundEndPoint(IPEndPoint endpoint)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        lock (_lifecycleGate)
+        {
+            if (_udpClient is null) throw new InvalidOperationException("Not listening. Call StartListeningAsync first.");
+            return _outboundEndpoints.Add(endpoint);
+        }
+    }
+
+    public bool RemoveOutboundEndPoint(IPEndPoint endpoint)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        lock (_lifecycleGate)
+        {
+            if (_udpClient is null) throw new InvalidOperationException("Not listening. Call StartListeningAsync first.");
+            return _outboundEndpoints.Remove(endpoint);
+        }
+    }
+
     public ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -57,6 +80,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (_udpClient is not null) return ValueTask.CompletedTask;
 
+            _outboundEndpoints.Replace(config.OutboundEndPoints);
             _config = config;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _udpClient = new UdpClient(new IPEndPoint(config.LocalAddress, config.LocalPort));
@@ -113,9 +137,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         new UdpHeader(body.Length, (short)messageType, config.SerializationProtocol).Write(frame);
         body.CopyTo(frame.AsSpan(UdpHeader.Size));
 
-        var endpoints = config.OutboundEndPoints
-            .DistinctBy(endpoint => endpoint.ToString(), StringComparer.Ordinal)
-            .ToArray();
+        var endpoints = _outboundEndpoints.GetSnapshot();
         if (endpoints.Length == 0)
         {
             throw new InvalidOperationException("No outbound endpoints are configured.");
@@ -173,6 +195,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _outboundEndpoints.Clear();
         _subscriptions.Clear();
         if (client is null) return;
         cts?.Cancel();
@@ -206,6 +229,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
             _config = null;
         }
 
+        _outboundEndpoints.Clear();
         _subscriptions.Clear();
         cts?.Cancel();
         client?.Dispose();
@@ -349,8 +373,7 @@ public sealed class UdpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
         ArgumentNullException.ThrowIfNull(config.OutboundEndPoints);
         foreach (var endpoint in config.OutboundEndPoints)
         {
-            if (endpoint is null) throw new ArgumentException("OutboundEndPoints must not contain null values.", nameof(config));
-            if (endpoint.Port == 0) throw new ArgumentException("OutboundEndPoints must not contain endpoints that use port zero.", nameof(config));
+            OutboundEndpointSet.Validate(endpoint, nameof(config));
         }
 
         if (config.MaxPayloadBytes <= 0) throw new ArgumentOutOfRangeException(nameof(config.MaxPayloadBytes));

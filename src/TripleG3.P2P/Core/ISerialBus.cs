@@ -17,7 +17,7 @@ public interface ISerialBus
     /// to the supplied <see cref="ProtocolConfiguration"/>. Safe to call multiple times;
     /// subsequent calls while already listening are ignored.
     /// </summary>
-    /// <param name="config">Protocol & transport configuration (remote endpoint, local port, serializer).</param>
+    /// <param name="config">Protocol and transport configuration (outbound endpoints, local port, serializer).</param>
     /// <param name="cancellationToken">Optional token to cancel startup.</param>
     ValueTask StartListeningAsync(ProtocolConfiguration config, CancellationToken cancellationToken = default);
 
@@ -35,7 +35,7 @@ public interface ISerialBus
     void SubscribeTo<T>(Action<T> handler);
 
     /// <summary>
-    /// Sends a message of type <typeparamref name="T"/> to the configured remote endpoint using
+    /// Sends a message of type <typeparamref name="T"/> to the configured outbound endpoints using
     /// the bus instance's <see cref="ProtocolConfiguration.SerializationProtocol"/>.
     /// </summary>
     /// <typeparam name="T">Message contract type.</typeparam>

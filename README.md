@@ -501,6 +501,21 @@ Each device can use the same `LocalPort` when its IP address is different. Confi
 `LocalAddress` with the device's actual interface address and add a route, firewall rule, or
 NAT mapping as needed; this library does not provide NAT traversal.
 
+##### Dynamic Lobby Membership
+
+`ProtocolConfiguration.OutboundEndPoints` seeds the bus at startup. For a running UDP or TCP bus,
+cast it to `IOutboundEndpointSerialBus` to change the destination set without restarting its listener:
+
+```csharp
+var endpointBus = (IOutboundEndpointSerialBus)bus;
+
+endpointBus.AddOutboundEndPoint(joiningPeer);
+endpointBus.RemoveOutboundEndPoint(leavingPeer);
+```
+
+Changes apply to future `SendAsync` calls. Removing a TCP endpoint also closes its outbound
+connection; a send that was already in progress may still finish.
+
 Full Mesh (N peers each send to all others): create N buses where each bus configures every other peer in `OutboundEndPoints`. (See integration test `Concurrent_FanOuts_All_Messages_Delivered_Exactly_Once`).
 
 Duplicate endpoint suppression:

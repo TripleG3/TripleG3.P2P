@@ -24,3 +24,4 @@
 - 2026-08-26: Quick-glance transport examples cover UDP, TCP, file transfer, RTP audio, and RTP video; media examples accept host-supplied encoded Opus or Annex B H.264 input.
 - 2026-08-26: Use `P2PMessageAttribute` for serial-bus protocol type names; it is transport-neutral and replaces the misleading `UdpMessageAttribute` name.
 - 2026-08-26: Use `P2PPropertyAttribute` for serial-bus member ordering; it is transport-neutral and replaces the misleading `UdpAttribute` name.
+- 2026-08-26: Use `IOutboundEndpointSerialBus` to update a running serial bus's destination set; configuration endpoints are startup seeds, and removing a TCP endpoint closes its outbound connection.
