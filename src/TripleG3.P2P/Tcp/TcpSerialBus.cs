@@ -465,7 +465,7 @@ public sealed class TcpSerialBus : ISubscriptionSerialBus, IDisposable, IAsyncDi
 
     private static string GetProtocolTypeName(Type type)
     {
-        var attribute = type.GetCustomAttribute<UdpMessageAttribute>();
+        var attribute = type.GetCustomAttribute<P2PMessageAttribute>();
         return attribute?.Name is { Length: > 0 } name ? name : type.Name;
     }
 

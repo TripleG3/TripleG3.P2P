@@ -281,6 +281,6 @@ public sealed class TransportHardeningTests
         Assert.True(condition(), "Condition not met before timeout.");
     }
 
-    [UdpMessage("HardeningSequence")]
+    [P2PMessage("HardeningSequence")]
     public sealed record SequenceMessage([property: Udp(1)] int Index);
 }

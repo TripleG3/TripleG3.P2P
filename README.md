@@ -1,5 +1,277 @@
 # TripleG3.P2P
 
+## Quick Glance Examples
+
+### [UDP Example](#wire-format-udp)
+
+```csharp
+using System;
+using System.Linq;
+using System.Net;
+using TripleG3.P2P.Attributes;
+using TripleG3.P2P.Core;
+
+var peers = new (string Name, IPAddress Address, int Port)[]
+{
+    ("Client A", IPAddress.Parse("10.42.0.10"), 7000),
+    ("Client B", IPAddress.Parse("10.42.0.21"), 7000),
+    ("Client C", IPAddress.Parse("10.42.0.23"), 7100)
+};
+
+var clientName = args.Length == 1
+    ? $"Client {args[0].Trim().ToUpperInvariant()}"
+    : throw new ArgumentException("Run with A, B, or C.");
+
+var current = peers.Single(peer => peer.Name == clientName);
+var bus = SerialBusFactory.CreateUdp();
+
+bus.SubscribeTo<Chat>(message => Console.WriteLine($"{message.Sender}: {message.Text}"));
+
+await bus.StartListeningAsync(new ProtocolConfiguration
+{
+    LocalAddress = current.Address,
+    LocalPort = current.Port,
+    OutboundEndPoints = peers
+        .Where(peer => peer.Name != current.Name)
+        .Select(peer => new IPEndPoint(peer.Address, peer.Port))
+        .ToArray(),
+    SerializationProtocol = SerializationProtocol.LengthPrefixed
+});
+
+while (Console.ReadLine() is { } text)
+{
+    await bus.SendAsync(new Chat(current.Name, text));
+}
+
+await bus.CloseConnectionAsync();
+
+[P2PMessage("Chat")]
+public sealed record Chat(
+    [property: Udp(1)] string Sender,
+    [property: Udp(2)] string Text);
+```
+
+### [TCP Example](#tcp-quick-start-reliable)
+
+```csharp
+using System;
+using System.Linq;
+using System.Net;
+using TripleG3.P2P.Attributes;
+using TripleG3.P2P.Core;
+
+var peers = new (string Name, IPAddress Address, int Port)[]
+{
+    ("Client A", IPAddress.Parse("10.42.0.10"), 7000),
+    ("Client B", IPAddress.Parse("10.42.0.21"), 7000),
+    ("Client C", IPAddress.Parse("10.42.0.23"), 7100)
+};
+
+var clientName = args.Length == 1
+    ? $"Client {args[0].Trim().ToUpperInvariant()}"
+    : throw new ArgumentException("Run with A, B, or C.");
+
+var current = peers.Single(peer => peer.Name == clientName);
+var bus = SerialBusFactory.CreateTcp();
+
+bus.SubscribeTo<Chat>(message => Console.WriteLine($"{message.Sender}: {message.Text}"));
+
+await bus.StartListeningAsync(new ProtocolConfiguration
+{
+    LocalAddress = current.Address,
+    LocalPort = current.Port,
+    OutboundEndPoints = peers
+        .Where(peer => peer.Name != current.Name)
+        .Select(peer => new IPEndPoint(peer.Address, peer.Port))
+        .ToArray(),
+    SerializationProtocol = SerializationProtocol.LengthPrefixed
+});
+
+while (Console.ReadLine() is { } text)
+{
+    await bus.SendAsync(new Chat(current.Name, text));
+}
+
+await bus.CloseConnectionAsync();
+
+[P2PMessage("Chat")]
+public sealed record Chat(
+    [property: Udp(1)] string Sender,
+    [property: Udp(2)] string Text);
+```
+
+### [File Transfer Example](#peer-to-peer-file-transfer)
+
+```csharp
+using System;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
+using TripleG3.P2P.FileTransfer;
+
+if (args.Length is < 1 or > 2)
+{
+    throw new ArgumentException("Run with A, B, or C and an optional source file path.");
+}
+
+var peers = new (string Name, IPEndPoint EndPoint)[]
+{
+    ("Client A", new IPEndPoint(IPAddress.Parse("10.42.0.10"), 9100)),
+    ("Client B", new IPEndPoint(IPAddress.Parse("10.42.0.21"), 9100)),
+    ("Client C", new IPEndPoint(IPAddress.Parse("10.42.0.23"), 9110))
+};
+
+var clientName = $"Client {args[0].Trim().ToUpperInvariant()}";
+var current = peers.Single(peer => peer.Name == clientName);
+
+await using var client = new PeerFileTransferClient(new FileTransferOptions
+{
+    LocalEndPoint = current.EndPoint
+});
+
+client.TransferRequested += (request, _) =>
+    new ValueTask<FileTransferDecision>(
+        FileTransferDecision.Accept(Path.Combine(Path.GetTempPath(), request.FileName)));
+
+await client.StartAsync();
+
+if (args.Length == 2)
+{
+    _ = await client.SendAsync(
+        args[1],
+        peers.Where(peer => peer.Name != current.Name).Select(peer => peer.EndPoint).ToArray());
+}
+
+await Task.Delay(Timeout.InfiniteTimeSpan);
+
+```
+
+### [RTP Audio Example](#rtp-audio)
+
+```csharp
+using System;
+using System.Net;
+using TripleG3.P2P.Audio;
+
+var peers = new (string Name, IPEndPoint EndPoint)[]
+{
+    ("Client A", new IPEndPoint(IPAddress.Parse("10.42.0.10"), 5004)),
+    ("Client B", new IPEndPoint(IPAddress.Parse("10.42.0.21"), 5004)),
+    ("Client C", new IPEndPoint(IPAddress.Parse("10.42.0.23"), 5014))
+};
+
+var clientName = args.Length == 1
+    ? $"Client {args[0].Trim().ToUpperInvariant()}"
+    : throw new ArgumentException("Run with A, B, or C.");
+
+var currentIndex = Array.FindIndex(peers, peer => peer.Name == clientName);
+if (currentIndex < 0)
+{
+    throw new ArgumentException("Run with A, B, or C.");
+}
+
+var current = peers[currentIndex];
+var remote = peers[(currentIndex + 1) % peers.Length];
+var config = new RtpAudioConfig
+{
+    LocalAddress = current.EndPoint.Address,
+    LocalPort = current.EndPoint.Port,
+    RemoteEndPoint = remote.EndPoint,
+    Ssrc = 0xA11CEu
+};
+
+await using var receiver = new RtpAudioReceiver(config);
+await using var sender = new RtpAudioSender(config);
+
+receiver.AudioFrameReceived += frame => Console.WriteLine($"{frame.Timestamp}:{frame.OpusFrame.Length}");
+
+await receiver.StartAsync();
+
+var timestamp = 0u;
+while (Console.ReadLine() is not null)
+{
+    await sender.SendAsync(new byte[] { 0xF8, 0xFF, 0xFE }, new AudioFrameMetadata(timestamp));
+    timestamp += 960;
+}
+
+await receiver.StopAsync();
+
+```
+
+### [RTP Video Example](#experimental-real-time-video-h264-over-rtp)
+
+```csharp
+using System;
+using System.IO;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
+using TripleG3.P2P.Video;
+using TripleG3.P2P.Video.Primitives;
+
+if (args.Length is < 1 or > 2)
+{
+    throw new ArgumentException("Run with A, B, or C and an optional Annex B H.264 path.");
+}
+
+var peers = new (string Name, IPEndPoint EndPoint)[]
+{
+    ("Client A", new IPEndPoint(IPAddress.Parse("10.42.0.10"), 5006)),
+    ("Client B", new IPEndPoint(IPAddress.Parse("10.42.0.21"), 5006)),
+    ("Client C", new IPEndPoint(IPAddress.Parse("10.42.0.23"), 5016))
+};
+
+var clientName = $"Client {args[0].Trim().ToUpperInvariant()}";
+var currentIndex = Array.FindIndex(peers, peer => peer.Name == clientName);
+if (currentIndex < 0)
+{
+    throw new ArgumentException("Run with A, B, or C and an optional Annex B H.264 path.");
+}
+
+var current = peers[currentIndex];
+var remote = peers[(currentIndex + 1) % peers.Length];
+const uint ssrc = 0xA11CEu;
+
+await using var receiver = new RtpVideoReceiver(
+    new RtpVideoReceiverConfig
+    {
+        LocalAddress = current.EndPoint.Address,
+        LocalPort = current.EndPoint.Port,
+        ExpectedSsrc = ssrc
+    },
+    new TripleG3.P2P.Security.NoOpCipher());
+
+using var sender = new RtpVideoSender(
+    new RtpVideoSenderConfig
+    {
+        RemoteIp = remote.EndPoint.Address.ToString(),
+        RemotePort = remote.EndPoint.Port,
+        Ssrc = ssrc
+    },
+    new TripleG3.P2P.Security.NoOpCipher());
+
+receiver.FrameReceived += frame =>
+{
+    if (frame is not { } received) return;
+    Console.WriteLine(received.AnnexB.Length);
+    received.Dispose();
+};
+
+await receiver.StartAsync();
+
+if (args.Length == 2)
+{
+    var annexB = await File.ReadAllBytesAsync(args[1]);
+    using var frame = EncodedAccessUnit.FromAnnexB(annexB, DateTimeOffset.UtcNow.Ticks, true);
+    await sender.SendAsync(frame);
+}
+
+await Task.Delay(Timeout.InfiniteTimeSpan);
+
+```
+
 ## Alice-facing transport APIs
 
 `TripleG3.P2P` exposes transport-only primitives that a host such as Alice can map into its own
@@ -32,7 +304,7 @@ High-performance, attribute-driven peer-to-peer messaging for .NET 10 / MAUI app
 Typical networking layers force you to hand-roll framing, routing, and serialization. TripleG3.P2P gives you:
 
 - A single minimal interface: `ISerialBus` (send, subscribe, start, close)
-- Deterministic wire contract via `[Udp]` & `[UdpMessage]` attributes (order + protocol name stability)
+- Deterministic wire contract via `[Udp]` & `[P2PMessage]` attributes (order + protocol name stability)
 - Envelope-based dispatch that is assembly agnostic (type *names* / attribute names, not CLR identity)
 - Choice between ultra-light delimiter serialization or raw JSON
 - Safe, isolated subscriptions (late subscribers don't crash the loop)
@@ -90,6 +362,15 @@ var results = await sender.SendAsync(
 ```
 
 If no `TransferRequested` handler is registered, inbound transfers are rejected. The receiver may reject a request from the handler, and the sender may cancel through its cancellation token. Configure `MaximumFileBytes`, `BufferSize`, and `MaximumConcurrentTransfers` for the host.
+
+---
+
+## RTP Audio
+
+`RtpAudioSender` sends pre-encoded 48 kHz mono, 20 ms Opus frames to one configured RTP endpoint.
+`RtpAudioReceiver` binds a local endpoint, validates the payload type and configured SSRC, and raises
+`AudioFrameReceived`. The host supplies Opus encoding and decoding, authorization, NAT traversal,
+and production media security.
 
 ---
 
@@ -164,10 +445,14 @@ Controls binding, outbound destinations, and the serialization protocol used for
 
 Configure `OutboundEndPoints` to fan out every `SendAsync` from a bus instance. The collection has set semantics: duplicate endpoints with the same `address:port` are suppressed. An empty collection creates a receive-only bus; `SendAsync` throws until at least one outbound endpoint is configured. These are configured unicast peers, not IP broadcast addresses.
 
-Basic one-to-many:
+##### Local Development: Multiple Processes on One Host
+
+When all peers run on the same computer, each listener needs a different loopback port. This
+configuration sends from the local hub at `127.0.0.1:7000` to three local receiver processes:
 
 ```csharp
 await bus.StartListeningAsync(new ProtocolConfiguration {
+    LocalAddress = IPAddress.Loopback,
     LocalPort = 7000,
     OutboundEndPoints = [
         new IPEndPoint(IPAddress.Loopback, 7001),
@@ -180,27 +465,41 @@ await bus.StartListeningAsync(new ProtocolConfiguration {
 await bus.SendAsync(new Chat("me", "hi everyone")); // reaches 7001, 7002, 7003
 ```
 
-Hub & Spokes (hub at 8000 -> spokes 8001/8002, spokes reply only to hub):
+Configure the three receiver processes with `LocalAddress = IPAddress.Loopback` and local ports
+`7001`, `7002`, and `7003`. They cannot all bind `127.0.0.1:7000` on the same host.
+
+##### Remote Devices: Shared Service Port Where Available
+
+Remote devices have unique IP addresses, so they can usually all listen on the same service port.
+This hypothetical hub at `10.42.0.10:7000` fans out to two devices on port `7000` and a third on
+port `7100` because that device already has another local service using `7000`:
 
 ```csharp
-// Hub
 await hub.StartListeningAsync(new ProtocolConfiguration {
-    LocalPort = 8000,
-    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 8001), new IPEndPoint(IPAddress.Loopback, 8002)],
-    SerializationProtocol = SerializationProtocol.JsonRaw
+    LocalAddress = IPAddress.Parse("10.42.0.10"),
+    LocalPort = 7000,
+    OutboundEndPoints = [
+        new IPEndPoint(IPAddress.Parse("10.42.0.21"), 7000),
+        new IPEndPoint(IPAddress.Parse("10.42.0.22"), 7000),
+        new IPEndPoint(IPAddress.Parse("10.42.0.23"), 7100) // Port 7000 is unavailable on this device.
+    ],
+    SerializationProtocol = SerializationProtocol.LengthPrefixed
 });
 
-// Spoke 1
-await s1.StartListeningAsync(new ProtocolConfiguration {
-    LocalPort = 8001,
-    OutboundEndPoints = [new IPEndPoint(IPAddress.Loopback, 8000)],
-    SerializationProtocol = SerializationProtocol.JsonRaw
-});
-
-// Spoke 2 (similar to s1; LocalPort = 8002)
-
-await hub.SendAsync(new Announcement("server", "hello spokes"));
+await hub.SendAsync(new Announcement("server", "hello remote peers"));
 ```
+
+The receiving devices bind these local endpoints:
+
+| Device | Local endpoint |
+| --- | --- |
+| Device A | `10.42.0.21:7000` |
+| Device B | `10.42.0.22:7000` |
+| Device C | `10.42.0.23:7100` |
+
+Each device can use the same `LocalPort` when its IP address is different. Configure
+`LocalAddress` with the device's actual interface address and add a route, firewall rule, or
+NAT mapping as needed; this library does not provide NAT traversal.
 
 Full Mesh (N peers each send to all others): create N buses where each bus configures every other peer in `OutboundEndPoints`. (See integration test `Concurrent_FanOuts_All_Messages_Delivered_Exactly_Once`).
 
@@ -258,11 +557,14 @@ Use `LengthPrefixed` for new attribute-based contracts. `None` remains available
 
 ### Attributes
 
-- `[UdpMessage]` or `[UdpMessage("CustomName")]` gives the logical protocol name (stable across assemblies)
-- `[UdpMessage<T>]` generic variant uses `typeof(T).Name` (or supplied override) for convenience
+- `[P2PMessage]` or `[P2PMessage("CustomName")]` gives the logical protocol name (stable across assemblies)
+- `[P2PMessage<T>]` generic variant uses `typeof(T).Name` (or supplied override) for convenience
 - `[Udp(order)]` marks and orders properties participating in attribute serialization.
 - Unannotated properties are ignored by `None` and `LengthPrefixed`.
 - Constructor parameters are matched to annotated properties by name and type.
+
+`P2PMessageAttribute` replaces `UdpMessageAttribute`. Change `[UdpMessage]` to `[P2PMessage]` in
+existing contracts; the protocol-visible name and wire format are unchanged.
 
 ### MessageType
 
@@ -293,12 +595,12 @@ using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
 using System.Net;
 
-[UdpMessage("Person")] // Protocol type name
+[P2PMessage("Person")] // Protocol type name
 public record Person([property: Udp(1)] string Name,
                      [property: Udp(2)] int Age,
                      [property: Udp(3)] Address Address);
 
-[UdpMessage<Address>] // Uses nameof(Address) unless overridden
+[P2PMessage<Address>] // Uses nameof(Address) unless overridden
 public record Address([property: Udp(1)] string Street,
                       [property: Udp(2)] string City,
                       [property: Udp(3)] string State,
@@ -405,7 +707,7 @@ Cancels the receive loop & disposes socket.
 
 ## Designing Message Contracts (Delimited Serializer)
 
-1. Add `[UdpMessage]` (optional if CLR name is acceptable) to each root message type.
+1. Add `[P2PMessage]` (optional if CLR name is acceptable) to each root message type.
 2. Annotate properties you want serialized with `[Udp(order)]` (1-based ordering recommended).
 3. Use only deterministic, immutable shapes (records ideal).
 4. Nested complex types must also follow the same attribute pattern.
@@ -414,7 +716,7 @@ Cancels the receive loop & disposes socket.
 ### Example
 
 ```csharp
-[UdpMessage("Ping")] public record Ping([property: Udp(1)] long Ticks);
+[P2PMessage("Ping")] public record Ping([property: Udp(1)] long Ticks);
 ```
 
 ### Primitive & String Support
@@ -560,7 +862,7 @@ await bus.StartListeningAsync(new ProtocolConfiguration {
     SerializationProtocol = SerializationProtocol.None
 });
 
-[UdpMessage("Chat")]
+[P2PMessage("Chat")]
 public record Chat([property: Udp(1)] string User, [property: Udp(2)] string Text);
 
 bus.SubscribeTo<Chat>(c => Console.WriteLine($"{c.User}: {c.Text}"));

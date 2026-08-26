@@ -152,6 +152,7 @@ try {
     $consumerProgram = Join-Path $consumerDirectory 'Program.cs'
     [System.IO.File]::WriteAllText($consumerProgram, @"
 using System.Net;
+using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
 
 var configuration = new ProtocolConfiguration
@@ -162,7 +163,11 @@ var configuration = new ProtocolConfiguration
 };
 
 ISerialBus bus = SerialBusFactory.CreateUdp();
+bus.SubscribeTo<PackageConsumerMessage>(_ => { });
 Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}");
+
+[P2PMessage("PackageConsumerMessage")]
+public sealed record PackageConsumerMessage([property: Udp(1)] string Text);
 "@)
 
     Invoke-Dotnet -Arguments @('restore', $consumerProject, '--configfile', $consumerNuGetConfig)

@@ -19,3 +19,7 @@
 - 2026-07-30: Opus RTP is 48 kHz mono in 20 ms packets with a bounded receiver dispatch queue; preserve restartable `StartAsync`/`StopAsync` lifecycle.
 - 2026-08-26: Release builds, tests, packs, and validates one versioned artifact; validate its nuspec, assembly informational version, and clean package-consumer compilation before NuGet publication.
 - 2026-08-26: `ProtocolConfiguration.OutboundEndPoints` is the single configured outbound fan-out set; allow an empty collection for receive-only buses and make `SendAsync` fail clearly when no endpoints are configured.
+- 2026-08-26: README endpoint examples distinguish loopback testing, which requires distinct local ports, from remote-device fan-out, where distinct IP addresses can use the same service port.
+- 2026-08-26: Keep README quick-glance examples self-contained and link each example heading to its detailed protocol section.
+- 2026-08-26: Quick-glance transport examples cover UDP, TCP, file transfer, RTP audio, and RTP video; media examples accept host-supplied encoded Opus or Annex B H.264 input.
+- 2026-08-26: Use `P2PMessageAttribute` for serial-bus protocol type names; it is transport-neutral and replaces the misleading `UdpMessageAttribute` name.

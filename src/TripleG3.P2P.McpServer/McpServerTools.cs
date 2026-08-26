@@ -37,7 +37,7 @@ public static class McpServerTools
         return new { valid = errors.Count == 0, errors };
     }
 
-    [McpServerTool(Name = "p2p_generate_message_contract"), Description("Generates a C# record with TripleG3.P2P UDP message attributes.")]
+    [McpServerTool(Name = "p2p_generate_message_contract"), Description("Generates a C# record with TripleG3.P2P message contract attributes.")]
     public static string GenerateMessageContract(
         [Description("Record type name.")] string typeName,
         [Description("Comma-separated fields such as 'string Name, int Age'.")] string fields,
@@ -50,7 +50,7 @@ public static class McpServerTools
             if (parts.Length != 2) throw new ArgumentException($"Invalid field '{field}'. Use 'type name'.");
             return $"[property: Udp({index + 1})] {parts[0]} {parts[1]}";
         });
-        return $"[UdpMessage(\"{Escape(protocolName)}\")]\npublic sealed record {typeName}({string.Join(", ", parameters)});";
+        return $"[P2PMessage(\"{Escape(protocolName)}\")]\npublic sealed record {typeName}({string.Join(", ", parameters)});";
     }
 
     [McpServerTool(Name = "p2p_generate_file_transfer_workflow"), Description("Generates receiver-consent and cancellable peer-to-peer file transfer code.")]

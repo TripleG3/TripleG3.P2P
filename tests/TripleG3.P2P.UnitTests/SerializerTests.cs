@@ -55,7 +55,7 @@ public sealed class SerializerTests
         }
     }
 
-    [UdpMessage("Detailed")]
+    [P2PMessage("Detailed")]
     public sealed record DetailedMessage(
         [property: Udp(2)] string Right,
         [property: Udp(1)] string Left,
@@ -67,10 +67,21 @@ public sealed class SerializerTests
 
     public sealed record NestedMessage([property: Udp(1)] string Value);
 
-    [UdpMessage("Legacy")]
+    [P2PMessage("Legacy")]
     public sealed record LegacyMessage(
         [property: Udp(2)] string Second,
         [property: Udp(1)] string First,
         [property: Udp(3)] DateTimeOffset Timestamp,
         [property: Udp(4)] decimal Amount);
+
+    [Fact]
+    public void Generic_P2PMessage_Uses_Referenced_Type_Name()
+    {
+        var attribute = new P2PMessageAttribute<GenericMessage>();
+
+        Assert.Equal(nameof(GenericMessage), attribute.Name);
+    }
+
+    [P2PMessage<GenericMessage>]
+    public sealed record GenericMessage([property: Udp(1)] string Value);
 }

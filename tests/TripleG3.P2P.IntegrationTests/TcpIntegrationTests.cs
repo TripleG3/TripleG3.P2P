@@ -7,8 +7,8 @@ namespace TripleG3.P2P.IntegrationTests;
 
 public class TcpIntegrationTests
 {
-    [UdpMessage("Chat")] public record Chat([property: Udp(1)] string User, [property: Udp(2)] string Text);
-    [UdpMessage("Seq")] public record Seq([property: Udp(1)] int Index);
+    [P2PMessage("Chat")] public record Chat([property: Udp(1)] string User, [property: Udp(2)] string Text);
+    [P2PMessage("Seq")] public record Seq([property: Udp(1)] int Index);
 
     [Theory]
     [InlineData(SerializationProtocol.None)]

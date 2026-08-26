@@ -7,7 +7,7 @@ namespace TripleG3.P2P.IntegrationTests;
 
 public class MultiFanOutTests
 {
-    [UdpMessage("Chat")] public record Chat([property: Udp(1)] string User, [property: Udp(2)] string Text);
+    [P2PMessage("Chat")] public record Chat([property: Udp(1)] string User, [property: Udp(2)] string Text);
 
     [Theory]
     [InlineData(SerializationProtocol.None)]
@@ -154,8 +154,8 @@ public class MultiFanOutTests
         return next;
     }
 
-    [UdpMessage("Person")] public record Person([property: Udp(1)] string Name, [property: Udp(2)] int Age, [property: Udp(3)] Address Address);
-    [UdpMessage("Address")] public record Address([property: Udp(1)] string Street, [property: Udp(2)] string City);
+    [P2PMessage("Person")] public record Person([property: Udp(1)] string Name, [property: Udp(2)] int Age, [property: Udp(3)] Address Address);
+    [P2PMessage("Address")] public record Address([property: Udp(1)] string Street, [property: Udp(2)] string City);
 
     [Theory]
     [InlineData(SerializationProtocol.None)]
