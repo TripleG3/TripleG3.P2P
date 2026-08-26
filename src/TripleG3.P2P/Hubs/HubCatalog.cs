@@ -10,6 +10,7 @@ public sealed class HubCatalog : IHubCatalog
     private readonly ConcurrentDictionary<Guid, HostedChatHub> _hostedChatHubs = new();
     private readonly ConcurrentDictionary<Guid, GamingLobbyHub> _gamingLobbies = new();
     private readonly ConcurrentDictionary<Guid, NotificationsHub> _notificationsHubs = new();
+    private readonly ConcurrentDictionary<Guid, VideoChatHub> _videoChatHubs = new();
     private readonly TimeProvider _timeProvider;
     private readonly ILoggerFactory _loggerFactory;
 
@@ -26,6 +27,8 @@ public sealed class HubCatalog : IHubCatalog
     public IReadOnlyCollection<Guid> GamingLobbyIds => Array.AsReadOnly(_gamingLobbies.Keys.Order().ToArray());
 
     public IReadOnlyCollection<Guid> NotificationsHubIds => Array.AsReadOnly(_notificationsHubs.Keys.Order().ToArray());
+
+    public IReadOnlyCollection<Guid> VideoChatHubIds => Array.AsReadOnly(_videoChatHubs.Keys.Order().ToArray());
 
     public ChatHub CreateChatHub(Guid hubId, HubOptions? options = null)
     {
@@ -80,6 +83,13 @@ public sealed class HubCatalog : IHubCatalog
         return hub;
     }
 
+    public VideoChatHub CreateVideoChatHub(Guid hubId, HubOptions? options = null)
+    {
+        var hub = new VideoChatHub(hubId, options, _timeProvider, _loggerFactory.CreateLogger<VideoChatHub>());
+        if (!_videoChatHubs.TryAdd(hubId, hub)) throw new InvalidOperationException($"Video chat hub {hubId} already exists.");
+        return hub;
+    }
+
     public bool TryGetChatHub(Guid hubId, out ChatHub? hub) => _chatHubs.TryGetValue(hubId, out hub);
 
     public bool TryGetHostedChatHub(Guid hubId, out HostedChatHub? hub) => _hostedChatHubs.TryGetValue(hubId, out hub);
@@ -87,6 +97,8 @@ public sealed class HubCatalog : IHubCatalog
     public bool TryGetGamingLobby(Guid lobbyId, out GamingLobbyHub? hub) => _gamingLobbies.TryGetValue(lobbyId, out hub);
 
     public bool TryGetNotificationsHub(Guid hubId, out NotificationsHub? hub) => _notificationsHubs.TryGetValue(hubId, out hub);
+
+    public bool TryGetVideoChatHub(Guid hubId, out VideoChatHub? hub) => _videoChatHubs.TryGetValue(hubId, out hub);
 
     public bool RemoveChatHub(Guid hubId, ChatHub expectedHub)
         => ((ICollection<KeyValuePair<Guid, ChatHub>>)_chatHubs).Remove(new KeyValuePair<Guid, ChatHub>(hubId, expectedHub));
@@ -99,4 +111,7 @@ public sealed class HubCatalog : IHubCatalog
 
     public bool RemoveNotificationsHub(Guid hubId, NotificationsHub expectedHub)
         => ((ICollection<KeyValuePair<Guid, NotificationsHub>>)_notificationsHubs).Remove(new KeyValuePair<Guid, NotificationsHub>(hubId, expectedHub));
+
+    public bool RemoveVideoChatHub(Guid hubId, VideoChatHub expectedHub)
+        => ((ICollection<KeyValuePair<Guid, VideoChatHub>>)_videoChatHubs).Remove(new KeyValuePair<Guid, VideoChatHub>(hubId, expectedHub));
 }

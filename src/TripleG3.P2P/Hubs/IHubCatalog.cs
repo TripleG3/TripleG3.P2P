@@ -10,6 +10,8 @@ public interface IHubCatalog
 
     IReadOnlyCollection<Guid> NotificationsHubIds { get; }
 
+    IReadOnlyCollection<Guid> VideoChatHubIds { get; }
+
     ChatHub CreateChatHub(Guid hubId, HubOptions? options = null);
 
     HostedChatHub CreateHostedChatHub(
@@ -26,6 +28,8 @@ public interface IHubCatalog
 
     NotificationsHub CreateNotificationsHub(Guid hubId, NotificationsHubOptions? options = null);
 
+    VideoChatHub CreateVideoChatHub(Guid hubId, HubOptions? options = null);
+
     bool TryGetChatHub(Guid hubId, out ChatHub? hub);
 
     bool TryGetHostedChatHub(Guid hubId, out HostedChatHub? hub);
@@ -34,6 +38,8 @@ public interface IHubCatalog
 
     bool TryGetNotificationsHub(Guid hubId, out NotificationsHub? hub);
 
+    bool TryGetVideoChatHub(Guid hubId, out VideoChatHub? hub);
+
     bool RemoveChatHub(Guid hubId, ChatHub expectedHub);
 
     bool RemoveHostedChatHub(Guid hubId, HostedChatHub expectedHub);
@@ -41,4 +47,6 @@ public interface IHubCatalog
     bool RemoveGamingLobby(Guid lobbyId, GamingLobbyHub expectedLobby);
 
     bool RemoveNotificationsHub(Guid hubId, NotificationsHub expectedHub);
+
+    bool RemoveVideoChatHub(Guid hubId, VideoChatHub expectedHub);
 }

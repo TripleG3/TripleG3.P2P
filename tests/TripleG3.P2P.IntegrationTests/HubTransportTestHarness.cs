@@ -37,6 +37,9 @@ internal sealed class HubTransportTestHarness : IAsyncDisposable
     public async ValueTask PublishAsync<TMessage>(HubDispatch<TMessage> dispatch, CancellationToken cancellationToken = default)
         => await PublishCoreAsync(dispatch.RecipientMemberIds, dispatch.Message, cancellationToken);
 
+    public async ValueTask PublishAsync<TMessage>(VideoChatDispatch<TMessage> dispatch, CancellationToken cancellationToken = default)
+        => await PublishCoreAsync(dispatch.RecipientMemberIds, dispatch.Message, cancellationToken);
+
     private async ValueTask PublishCoreAsync<TMessage>(
         IReadOnlyList<Guid> recipientMemberIds,
         TMessage message,

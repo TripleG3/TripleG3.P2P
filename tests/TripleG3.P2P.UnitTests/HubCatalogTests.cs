@@ -14,12 +14,14 @@ public sealed class HubCatalogTests
         var hostedId = Guid.NewGuid();
         var gamingId = Guid.NewGuid();
         var notificationsId = Guid.NewGuid();
+        var videoChatId = Guid.NewGuid();
         var host = Guid.NewGuid();
 
         var chat = catalog.CreateChatHub(chatId);
         var hosted = catalog.CreateHostedChatHub(hostedId, host, "Host");
         var gaming = catalog.CreateGamingLobby(gamingId, host, "Host");
         var notifications = catalog.CreateNotificationsHub(notificationsId);
+        var videoChat = catalog.CreateVideoChatHub(videoChatId);
 
         Assert.True(catalog.TryGetChatHub(chatId, out var foundChat));
         Assert.Same(chat, foundChat);
@@ -29,6 +31,8 @@ public sealed class HubCatalogTests
         Assert.Same(gaming, foundGaming);
         Assert.True(catalog.TryGetNotificationsHub(notificationsId, out var foundNotifications));
         Assert.Same(notifications, foundNotifications);
+        Assert.True(catalog.TryGetVideoChatHub(videoChatId, out var foundVideoChat));
+        Assert.Same(videoChat, foundVideoChat);
         Assert.True(catalog.RemoveChatHub(chatId, chat));
         Assert.False(catalog.TryGetChatHub(chatId, out _));
     }

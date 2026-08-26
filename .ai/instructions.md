@@ -29,3 +29,4 @@
 - 2026-08-26: Hub integration tests use dedicated recipient buses for exact UDP/TCP routing and real RTP audio receivers for team isolation; never test team routing by mutating one shared bus destination set.
 - 2026-08-26: Existing hubs route arbitrary non-null payloads through `HubDispatch<TMessage>`; generic payloads receive authoritative routing metadata and are not retained in text chat history by default.
 - 2026-08-26: `NotificationsHub` is an in-process device routing/projection service only; it preserves the full notification, provides Windows/Android/iOS views, and never calls external push providers.
+- 2026-08-26: `VideoChatHub` owns participant/media state and recipient routes only; hosts map one monotonic capture timeline through `RtpMediaClock` and own all capture, encoding, protected RTP fan-out, decoding, rendering, and playback.

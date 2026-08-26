@@ -506,6 +506,50 @@ Only trusted host code should register or remove devices and create recipient se
 authorize user and device identifiers before invoking `NotificationsHub`; payload-provided identities
 are not trusted.
 
+### Video chat hub
+
+`VideoChatHub` is an ownerless zero-to-many participant room for chat, custom signaling, and
+multiparty media routing. Camera and microphone states are independent and disabled by default. The
+hub returns recipient IDs and validates route freshness; the host owns capture, encoding, encryption,
+RTP sender/receiver instances, decoding, rendering, and playback.
+
+```csharp
+var videoChat = catalog.CreateVideoChatHub(Guid.NewGuid());
+var alice = Guid.NewGuid();
+var bob = Guid.NewGuid();
+
+videoChat.Join(alice, "Alice");
+videoChat.Join(bob, "Bob");
+videoChat.SetCameraEnabled(alice, true);
+videoChat.SetMicrophoneEnabled(alice, true);
+
+VideoChatRecipientRoute mediaRoute = videoChat.GetMediaRoute(
+    alice,
+    VideoChatMediaKind.AudioAndVideo);
+```
+
+Use one monotonic capture timestamp to derive corresponding RTP clock values:
+
+```csharp
+var captureOrigin = Stopwatch.GetTimestamp();
+var clock = new RtpMediaClock(captureOrigin, Stopwatch.Frequency);
+var captureTimestamp = Stopwatch.GetTimestamp();
+RtpMediaTimestamps timestamps = clock.Map(captureTimestamp);
+
+var audioMetadata = new AudioFrameMetadata(timestamps.AudioTimestamp48k);
+using var videoFrame = new EncodedAccessUnit(
+    annexB,
+    isKeyFrame,
+    timestamps.VideoTimestamp90k,
+    captureTimestamp);
+```
+
+Check `IsRouteCurrent` and `RevocationToken` during each fan-out batch. Membership and
+camera/microphone changes invalidate and cancel prior media routes; text and custom signaling do not.
+RTP timestamps share one publisher's monotonic capture origin. This is timestamp correspondence, not
+receiver playout synchronization. Production synchronization across devices still requires
+authenticated signaling and RTCP clock correlation.
+
 Register the process-wide catalog with dependency injection:
 
 ```csharp
@@ -993,6 +1037,7 @@ The integration suite (`MultiFanOutTests`, `TcpIntegrationTests`, `TransportHard
 - Gaming all-lobby and team-only chat isolation over real UDP and TCP sockets
 - Gaming team-only RTP audio delivery and stale route invalidation
 - Notification user/device/platform routing and full/platform-specific parsing over UDP and TCP
+- Video chat text/custom signaling over UDP/TCP and common-origin RTP audio/video timestamp delivery
 - Receiver start/stop/restart and disposal races
 - RTCP timing and negotiation/keyframe signaling
 

@@ -177,7 +177,13 @@ var notificationDispatch = notifications.Route(
     new NotificationRequest("Ready", "Open the app."),
     NotificationRecipient.ForDevices(device.DeviceId));
 var wireDelivery = notificationDispatch.Deliveries[0].ToWireDelivery();
-Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}:{dispatch.Revision}:{customDispatch.Revision}:{wireDelivery.Platform}");
+var videoChat = catalog.CreateVideoChatHub(Guid.NewGuid());
+videoChat.Join(memberId, "PackageConsumer");
+videoChat.SetCameraEnabled(memberId, true);
+var mediaRoute = videoChat.GetMediaRoute(memberId, VideoChatMediaKind.Video);
+var mediaClock = new RtpMediaClock(0, TimeSpan.TicksPerSecond);
+var mediaTimestamps = mediaClock.Map(TimeSpan.TicksPerSecond);
+Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}:{dispatch.Revision}:{customDispatch.Revision}:{wireDelivery.Platform}:{mediaRoute.RoutingRevision}:{mediaTimestamps.VideoTimestamp90k}");
 
 [P2PMessage("PackageConsumerMessage")]
 public sealed record PackageConsumerMessage([property: P2PProperty(1)] string Text);

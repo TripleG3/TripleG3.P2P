@@ -11,5 +11,7 @@ public enum HubNotificationKind
     TeamRemoved,
     TeamAssigned,
     TeamUnassigned,
-    AudioPolicyChanged
+    AudioPolicyChanged,
+    CameraStateChanged,
+    MicrophoneStateChanged
 }
