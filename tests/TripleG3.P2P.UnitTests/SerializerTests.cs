@@ -57,22 +57,22 @@ public sealed class SerializerTests
 
     [P2PMessage("Detailed")]
     public sealed record DetailedMessage(
-        [property: Udp(2)] string Right,
-        [property: Udp(1)] string Left,
-        [property: Udp(3)] NestedMessage Nested,
-        [property: Udp(4)] string Empty,
-        [property: Udp(5)] string? Optional,
-        [property: Udp(6)] DateTimeOffset Timestamp,
-        [property: Udp(7)] decimal Amount);
+        [property: P2PProperty(2)] string Right,
+        [property: P2PProperty(1)] string Left,
+        [property: P2PProperty(3)] NestedMessage Nested,
+        [property: P2PProperty(4)] string Empty,
+        [property: P2PProperty(5)] string? Optional,
+        [property: P2PProperty(6)] DateTimeOffset Timestamp,
+        [property: P2PProperty(7)] decimal Amount);
 
-    public sealed record NestedMessage([property: Udp(1)] string Value);
+    public sealed record NestedMessage([property: P2PProperty(1)] string Value);
 
     [P2PMessage("Legacy")]
     public sealed record LegacyMessage(
-        [property: Udp(2)] string Second,
-        [property: Udp(1)] string First,
-        [property: Udp(3)] DateTimeOffset Timestamp,
-        [property: Udp(4)] decimal Amount);
+        [property: P2PProperty(2)] string Second,
+        [property: P2PProperty(1)] string First,
+        [property: P2PProperty(3)] DateTimeOffset Timestamp,
+        [property: P2PProperty(4)] decimal Amount);
 
     [Fact]
     public void Generic_P2PMessage_Uses_Referenced_Type_Name()
@@ -83,5 +83,5 @@ public sealed class SerializerTests
     }
 
     [P2PMessage<GenericMessage>]
-    public sealed record GenericMessage([property: Udp(1)] string Value);
+    public sealed record GenericMessage([property: P2PProperty(1)] string Value);
 }

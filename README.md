@@ -47,8 +47,8 @@ await bus.CloseConnectionAsync();
 
 [P2PMessage("Chat")]
 public sealed record Chat(
-    [property: Udp(1)] string Sender,
-    [property: Udp(2)] string Text);
+    [property: P2PProperty(1)] string Sender,
+    [property: P2PProperty(2)] string Text);
 ```
 
 ### [TCP Example](#tcp-quick-start-reliable)
@@ -96,8 +96,8 @@ await bus.CloseConnectionAsync();
 
 [P2PMessage("Chat")]
 public sealed record Chat(
-    [property: Udp(1)] string Sender,
-    [property: Udp(2)] string Text);
+    [property: P2PProperty(1)] string Sender,
+    [property: P2PProperty(2)] string Text);
 ```
 
 ### [File Transfer Example](#peer-to-peer-file-transfer)
@@ -304,7 +304,7 @@ High-performance, attribute-driven peer-to-peer messaging for .NET 10 / MAUI app
 Typical networking layers force you to hand-roll framing, routing, and serialization. TripleG3.P2P gives you:
 
 - A single minimal interface: `ISerialBus` (send, subscribe, start, close)
-- Deterministic wire contract via `[Udp]` & `[P2PMessage]` attributes (order + protocol name stability)
+- Deterministic wire contract via `[P2PProperty]` & `[P2PMessage]` attributes (order + protocol name stability)
 - Envelope-based dispatch that is assembly agnostic (type *names* / attribute names, not CLR identity)
 - Choice between ultra-light delimiter serialization or raw JSON
 - Safe, isolated subscriptions (late subscribers don't crash the loop)
@@ -559,12 +559,14 @@ Use `LengthPrefixed` for new attribute-based contracts. `None` remains available
 
 - `[P2PMessage]` or `[P2PMessage("CustomName")]` gives the logical protocol name (stable across assemblies)
 - `[P2PMessage<T>]` generic variant uses `typeof(T).Name` (or supplied override) for convenience
-- `[Udp(order)]` marks and orders properties participating in attribute serialization.
+- `[P2PProperty(order)]` marks and orders properties participating in attribute serialization.
 - Unannotated properties are ignored by `None` and `LengthPrefixed`.
 - Constructor parameters are matched to annotated properties by name and type.
 
-`P2PMessageAttribute` replaces `UdpMessageAttribute`. Change `[UdpMessage]` to `[P2PMessage]` in
-existing contracts; the protocol-visible name and wire format are unchanged.
+`P2PMessageAttribute` replaces `UdpMessageAttribute`, and `P2PPropertyAttribute` replaces
+`UdpAttribute`. Change `[UdpMessage]` to `[P2PMessage]` and `[Udp(order)]` to
+`[P2PProperty(order)]` in existing contracts; protocol-visible names, ordering, and wire formats are
+unchanged.
 
 ### MessageType
 
@@ -596,15 +598,15 @@ using TripleG3.P2P.Core;
 using System.Net;
 
 [P2PMessage("Person")] // Protocol type name
-public record Person([property: Udp(1)] string Name,
-                     [property: Udp(2)] int Age,
-                     [property: Udp(3)] Address Address);
+public record Person([property: P2PProperty(1)] string Name,
+                     [property: P2PProperty(2)] int Age,
+                     [property: P2PProperty(3)] Address Address);
 
 [P2PMessage<Address>] // Uses nameof(Address) unless overridden
-public record Address([property: Udp(1)] string Street,
-                      [property: Udp(2)] string City,
-                      [property: Udp(3)] string State,
-                      [property: Udp(4)] string Zip);
+public record Address([property: P2PProperty(1)] string Street,
+                      [property: P2PProperty(2)] string City,
+                      [property: P2PProperty(3)] string State,
+                      [property: P2PProperty(4)] string Zip);
 
 var bus = SerialBusFactory.CreateUdp();
 await bus.StartListeningAsync(new ProtocolConfiguration {
@@ -662,7 +664,7 @@ await jsonBus.StartListeningAsync(new ProtocolConfiguration {
 });
 ```
 
-JSON serializer ignores `[Udp]` ordering—standard JSON rules apply; `TypeName` embedded as `typeName`/`TypeName`.
+JSON serializer ignores `[P2PProperty]` ordering—standard JSON rules apply; `TypeName` embedded as `typeName`/`TypeName`.
 
 ---
 
@@ -708,7 +710,7 @@ Cancels the receive loop & disposes socket.
 ## Designing Message Contracts (Delimited Serializer)
 
 1. Add `[P2PMessage]` (optional if CLR name is acceptable) to each root message type.
-2. Annotate properties you want serialized with `[Udp(order)]` (1-based ordering recommended).
+2. Annotate properties you want serialized with `[P2PProperty(order)]` (1-based ordering recommended).
 3. Use only deterministic, immutable shapes (records ideal).
 4. Nested complex types must also follow the same attribute pattern.
 5. Changing order or adding/removing annotated properties is a protocol breaking change.
@@ -716,7 +718,7 @@ Cancels the receive loop & disposes socket.
 ### Example
 
 ```csharp
-[P2PMessage("Ping")] public record Ping([property: Udp(1)] long Ticks);
+[P2PMessage("Ping")] public record Ping([property: P2PProperty(1)] long Ticks);
 ```
 
 ### Primitive & String Support
@@ -848,7 +850,7 @@ Q: Can I mix serializers on the same socket?
 A: One `ISerialBus` instance uses one `SerializationProtocol`. Create multiple instances for mixed protocols.
 
 Q: Is ordering enforced?  
-A: Receiver trusts the order defined by `[Udp(n)]`. Reordering is a breaking change.
+A: Receiver trusts the order defined by `[P2PProperty(n)]`. Reordering is a breaking change.
 
 ---
 
@@ -863,7 +865,7 @@ await bus.StartListeningAsync(new ProtocolConfiguration {
 });
 
 [P2PMessage("Chat")]
-public record Chat([property: Udp(1)] string User, [property: Udp(2)] string Text);
+public record Chat([property: P2PProperty(1)] string User, [property: P2PProperty(2)] string Text);
 
 bus.SubscribeTo<Chat>(c => Console.WriteLine($"{c.User}: {c.Text}"));
 await bus.SendAsync(new Chat("me", "hi there"));

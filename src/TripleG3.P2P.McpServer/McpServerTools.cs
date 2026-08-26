@@ -48,7 +48,7 @@ public static class McpServerTools
         {
             var parts = field.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (parts.Length != 2) throw new ArgumentException($"Invalid field '{field}'. Use 'type name'.");
-            return $"[property: Udp({index + 1})] {parts[0]} {parts[1]}";
+            return $"[property: P2PProperty({index + 1})] {parts[0]} {parts[1]}";
         });
         return $"[P2PMessage(\"{Escape(protocolName)}\")]\npublic sealed record {typeName}({string.Join(", ", parameters)});";
     }

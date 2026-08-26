@@ -4,7 +4,7 @@ using TripleG3.P2P.Core;
 namespace TripleG3.P2P.Serialization;
 
 /// <summary>
-/// Attribute-driven, delimiter (@-@) based serializer capturing only properties marked with <c>[Udp]</c>.
+/// Attribute-driven, delimiter (@-@) based serializer capturing only properties marked with <c>[P2PProperty]</c>.
 /// Provides a compact textual wire format with minimal allocations and recursive support for nested annotated types.
 /// </summary>
 internal sealed class NoneMessageSerializer : IMessageSerializer

@@ -6,7 +6,7 @@ namespace TripleG3.P2P.Core;
 public enum SerializationProtocol : short
 {
     /// <summary>
-    /// Attribute-driven delimited serialization using ordered <c>[Udp]</c> properties.
+    /// Attribute-driven delimited serialization using ordered <c>[P2PProperty]</c> properties.
     /// </summary>
     None = 0,
     /// <summary>

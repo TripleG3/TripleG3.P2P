@@ -63,7 +63,7 @@ internal sealed class SerializationContract
     {
         var orderedProperties = type
             .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .Select(property => (Property: property, Attribute: property.GetCustomAttribute<UdpAttribute>()))
+            .Select(property => (Property: property, Attribute: property.GetCustomAttribute<P2PPropertyAttribute>()))
             .Where(item => item.Attribute is not null)
             .OrderBy(item => item.Attribute!.Order ?? int.MaxValue)
             .ThenBy(item => item.Property.Name, StringComparer.Ordinal)
@@ -71,7 +71,7 @@ internal sealed class SerializationContract
 
         if (orderedProperties.Length == 0)
         {
-            throw new InvalidOperationException($"Type {type.FullName} has no properties marked with {nameof(UdpAttribute)}.");
+            throw new InvalidOperationException($"Type {type.FullName} has no properties marked with {nameof(P2PPropertyAttribute)}.");
         }
 
         var duplicateOrder = orderedProperties
@@ -80,7 +80,7 @@ internal sealed class SerializationContract
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateOrder is not null)
         {
-            throw new InvalidOperationException($"Type {type.FullName} has duplicate UDP order {duplicateOrder.Key}.");
+            throw new InvalidOperationException($"Type {type.FullName} has duplicate P2P property order {duplicateOrder.Key}.");
         }
 
         var properties = orderedProperties.Select(item => item.Property).ToArray();
@@ -97,7 +97,7 @@ internal sealed class SerializationContract
 
         if (candidates.Length > 1)
         {
-            throw new InvalidOperationException($"Type {type.FullName} has multiple constructors matching its UDP contract.");
+            throw new InvalidOperationException($"Type {type.FullName} has multiple constructors matching its P2P property contract.");
         }
 
         var parameterless = type.GetConstructor(Type.EmptyTypes);
@@ -106,7 +106,7 @@ internal sealed class SerializationContract
             return new SerializationContract(type, properties, parameterless, [], true);
         }
 
-        throw new InvalidOperationException($"Type {type.FullName} needs one public constructor whose parameters match its UDP properties by name and type.");
+        throw new InvalidOperationException($"Type {type.FullName} needs one public constructor whose parameters match its P2P properties by name and type.");
     }
 
     private static int[]? TryMapConstructor(ConstructorInfo constructor, IReadOnlyList<PropertyInfo> properties)

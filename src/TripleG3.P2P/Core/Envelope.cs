@@ -7,7 +7,7 @@ namespace TripleG3.P2P.Core;
 /// Serialized differently depending on the <see cref="SerializationProtocol"/>.
 /// </summary>
 /// <typeparam name="T">Payload contract type.</typeparam>
-public record Envelope<T>([property: Udp(1)] string TypeName, T? Message)
+public record Envelope<T>([property: P2PProperty(1)] string TypeName, T? Message)
 {
     /// <summary>
     /// An empty envelope instance (TypeName = empty, Message = default).

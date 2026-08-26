@@ -282,5 +282,5 @@ public sealed class TransportHardeningTests
     }
 
     [P2PMessage("HardeningSequence")]
-    public sealed record SequenceMessage([property: Udp(1)] int Index);
+    public sealed record SequenceMessage([property: P2PProperty(1)] int Index);
 }

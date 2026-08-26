@@ -167,7 +167,7 @@ bus.SubscribeTo<PackageConsumerMessage>(_ => { });
 Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}");
 
 [P2PMessage("PackageConsumerMessage")]
-public sealed record PackageConsumerMessage([property: Udp(1)] string Text);
+public sealed record PackageConsumerMessage([property: P2PProperty(1)] string Text);
 "@)
 
     Invoke-Dotnet -Arguments @('restore', $consumerProject, '--configfile', $consumerNuGetConfig)
