@@ -1,6 +1,7 @@
 using System.Globalization;
 using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
+using TripleG3.P2P.Hubs;
 using TripleG3.P2P.Serialization;
 using Xunit;
 
@@ -80,6 +81,28 @@ public sealed class SerializerTests
         var attribute = new P2PMessageAttribute<GenericMessage>();
 
         Assert.Equal(nameof(GenericMessage), attribute.Name);
+    }
+
+    [Fact]
+    public void LengthPrefixed_RoundTrips_Hub_Wire_Contracts()
+    {
+        var timestamp = new DateTimeOffset(2026, 8, 26, 12, 30, 0, TimeSpan.Zero);
+        var message = new HubChatMessage(
+            Guid.NewGuid(),
+            42,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "Alice",
+            HubAudience.Team,
+            Guid.NewGuid(),
+            "Ready",
+            timestamp);
+        var envelope = new Envelope<HubChatMessage>("HubChatMessage", message);
+        var serializer = new LengthPrefixedMessageSerializer();
+
+        var result = serializer.Deserialize<Envelope<HubChatMessage>>(serializer.Serialize(envelope));
+
+        Assert.Equal(envelope, result);
     }
 
     [P2PMessage<GenericMessage>]

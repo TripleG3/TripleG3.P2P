@@ -154,6 +154,7 @@ try {
 using System.Net;
 using TripleG3.P2P.Attributes;
 using TripleG3.P2P.Core;
+using TripleG3.P2P.Hubs;
 
 var configuration = new ProtocolConfiguration
 {
@@ -164,7 +165,12 @@ var configuration = new ProtocolConfiguration
 
 ISerialBus bus = SerialBusFactory.CreateUdp();
 bus.SubscribeTo<PackageConsumerMessage>(_ => { });
-Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}");
+IHubCatalog catalog = new HubCatalog();
+var hub = catalog.CreateChatHub(Guid.NewGuid());
+var memberId = Guid.NewGuid();
+hub.Join(memberId, "PackageConsumer");
+var dispatch = hub.SendMessage(memberId, "ready");
+Console.WriteLine($"{configuration.SerializationProtocol}:{bus.IsListening}:{dispatch.Revision}");
 
 [P2PMessage("PackageConsumerMessage")]
 public sealed record PackageConsumerMessage([property: P2PProperty(1)] string Text);

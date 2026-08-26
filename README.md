@@ -374,6 +374,80 @@ and production media security.
 
 ---
 
+## Hubs
+
+The `TripleG3.P2P.Hubs` namespace provides authoritative in-memory state and routing policy above the
+transport layer. Hubs assign server timestamps and identifiers, expose immutable snapshots, maintain
+bounded message and notification histories, and return recipient member IDs for accepted chat or
+audio routes. Applications map member IDs to authenticated sessions and network endpoints.
+
+### Chat hubs
+
+`ChatHub` is ownerless: zero or more members can join or leave themselves. `HostedChatHub` starts
+with one host; hosts can add, remove, promote, and demote members, while the final host cannot leave
+members behind.
+
+```csharp
+var catalog = new HubCatalog();
+var room = catalog.CreateChatHub(Guid.NewGuid());
+var alice = Guid.NewGuid();
+var bob = Guid.NewGuid();
+
+room.Join(alice, "Alice");
+room.Join(bob, "Bob");
+
+HubDispatch dispatch = room.SendMessage(alice, "Hello");
+```
+
+For hosted moderation:
+
+```csharp
+var host = Guid.NewGuid();
+var room = catalog.CreateHostedChatHub(Guid.NewGuid(), host, "Host");
+var player = Guid.NewGuid();
+
+room.AddMember(host, player, "Player");
+room.PromoteMember(host, player);
+room.RemoveMember(player, host);
+```
+
+### Gaming lobby hub
+
+`GamingLobbyHub` adds zero or more teams, exclusive team assignment, all-lobby or team-only chat,
+and all-lobby or team-only RTP-audio routing policy. It returns a `HubAudioRoute`; the host maps those
+recipient IDs to dedicated `RtpAudioSender` instances.
+
+```csharp
+var host = Guid.NewGuid();
+var lobby = catalog.CreateGamingLobby(Guid.NewGuid(), host, "Host");
+var red = Guid.NewGuid();
+var player = Guid.NewGuid();
+
+lobby.AddTeam(host, red, "Red");
+lobby.AddMember(host, player, "Player");
+lobby.AssignMemberToTeam(host, player, red);
+
+HubDispatch chat = lobby.SendChat(player, HubAudience.Team, red, "Ready");
+HubAudioRoute audio = lobby.GetAudioRoute(player, HubAudience.Team, red);
+```
+
+Register the process-wide catalog with dependency injection:
+
+```csharp
+services.AddP2PHubs();
+var catalog = serviceProvider.GetRequiredService<IHubCatalog>();
+```
+
+Hubs do not trust member IDs received from payloads and do not publish directly to network transports.
+All requester and member ID parameters must be trusted identities resolved by the hosting application
+from an authenticated session. The host then publishes `HubDispatch` or applies `HubAudioRoute`.
+Check `GamingLobbyHub.IsAudioRouteCurrent` immediately before applying an audio route; membership,
+team, and policy changes invalidate prior revisions. Do not implement team delivery by temporarily
+mutating one bus's global outbound endpoint set; use targeted session delivery or one stable transport
+per audience.
+
+---
+
 ## Installation
 
 Install the core library from NuGet:
@@ -840,6 +914,9 @@ The integration suite (`MultiFanOutTests`, `TcpIntegrationTests`, `TransportHard
 - Malformed input recovery, cancellation, and disposable subscriptions
 - All three serialization protocols
 - RTP video DI transfer over a real UDP socket
+- Ownerless and hosted chat routing over real UDP and TCP sockets
+- Gaming all-lobby and team-only chat isolation over real UDP and TCP sockets
+- Gaming team-only RTP audio delivery and stale route invalidation
 - Receiver start/stop/restart and disposal races
 - RTCP timing and negotiation/keyframe signaling
 

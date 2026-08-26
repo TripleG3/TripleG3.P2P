@@ -25,3 +25,5 @@
 - 2026-08-26: Use `P2PMessageAttribute` for serial-bus protocol type names; it is transport-neutral and replaces the misleading `UdpMessageAttribute` name.
 - 2026-08-26: Use `P2PPropertyAttribute` for serial-bus member ordering; it is transport-neutral and replaces the misleading `UdpAttribute` name.
 - 2026-08-26: Use `IOutboundEndpointSerialBus` to update a running serial bus's destination set; configuration endpoints are startup seeds, and removing a TCP endpoint closes its outbound connection.
+- 2026-08-26: Hub services own authoritative identity, membership, roles, teams, notifications, and recipient routes above transport; hosts authenticate member IDs and publish returned routes separately.
+- 2026-08-26: Hub integration tests use dedicated recipient buses for exact UDP/TCP routing and real RTP audio receivers for team isolation; never test team routing by mutating one shared bus destination set.
