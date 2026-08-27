@@ -58,7 +58,7 @@ jobs:
 
       - name: Integration test (Release)
         shell: pwsh
-        run: dotnet test $env:INTEGRATION_TEST_PROJECT -c Release --no-build --no-restore --logger "trx;LogFilePrefix=integration-release" --results-directory $env:TEST_RESULTS_PATH
+        run: dotnet test $env:INTEGRATION_TEST_PROJECT -c Release --no-build --no-restore --logger "trx;LogFilePrefix=integration-release" --results-directory $env:TEST_RESULTS_PATH --blame-hang --blame-crash -- xunit.parallelizeTestCollections=false
 
       - name: Prepare package artifacts
         shell: pwsh
