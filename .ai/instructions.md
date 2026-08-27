@@ -31,3 +31,4 @@
 - 2026-08-26: `NotificationsHub` is an in-process device routing/projection service only; it preserves the full notification, provides Windows/Android/iOS views, and never calls external push providers.
 - 2026-08-26: `VideoChatHub` owns participant/media state and recipient routes only; hosts map one monotonic capture timeline through `RtpMediaClock` and own all capture, encoding, protected RTP fan-out, decoding, rendering, and playback.
 - 2026-08-27: `ConnectedDeviceHub` is a domain-neutral, in-memory routing and live-session control hub; it produces immutable snapshots and dispatch plans but never owns authentication, approval, workflows, persistence, application queues, tools, or data-plane execution.
+- 2026-08-27: Release integration tests run with xUnit test-collection parallelization disabled to prevent shared localhost port-allocation races in GitHub-hosted runners.
