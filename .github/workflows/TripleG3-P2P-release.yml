@@ -108,14 +108,7 @@ jobs:
           }
 
           foreach ($package in $packages) {
-            dotnet nuget push $package.FullName --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate --no-symbols
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          }
-
-          Get-ChildItem -LiteralPath $env:ARTIFACTS_PATH -File -Filter '*.snupkg' | ForEach-Object {
-            dotnet nuget push $_.FullName --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate
+            dotnet nuget push $package.FullName --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }

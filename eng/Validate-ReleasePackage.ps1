@@ -29,9 +29,17 @@ $packages = @(
     Get-ChildItem -LiteralPath $resolvedPackageDirectory -File -Filter '*.nupkg' |
         Where-Object Name -eq "TripleG3.P2P.$ExpectedVersion.nupkg"
 )
+$symbolPackages = @(
+    Get-ChildItem -LiteralPath $resolvedPackageDirectory -File -Filter '*.snupkg' |
+        Where-Object Name -eq "TripleG3.P2P.$ExpectedVersion.snupkg"
+)
 
 if ($packages.Count -ne 1) {
     throw "Expected exactly one TripleG3.P2P package for version $ExpectedVersion in $resolvedPackageDirectory."
+}
+
+if ($symbolPackages.Count -ne 1) {
+    throw "Expected exactly one TripleG3.P2P symbols package for version $ExpectedVersion in $resolvedPackageDirectory."
 }
 
 $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "TripleG3.P2P-package-validation-$([Guid]::NewGuid().ToString('N'))"
@@ -41,10 +49,16 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
     $package = $packages[0]
+    $symbolPackage = $symbolPackages[0]
     $assemblyPath = Join-Path $temporaryDirectory 'TripleG3.P2P.dll'
     $archive = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
+    $mainPackageEntries = @{}
 
     try {
+        foreach ($entry in $archive.Entries) {
+            $mainPackageEntries[$entry.FullName] = $true
+        }
+
         $nuspecEntries = @($archive.Entries | Where-Object FullName -Like '*.nuspec')
         if ($nuspecEntries.Count -ne 1) {
             throw 'Package must contain exactly one nuspec file.'
@@ -79,6 +93,21 @@ try {
             throw "Unexpected package license '$licenseExpression'."
         }
 
+        $dependencyGroups = @($metadata.SelectNodes("*[local-name()='dependencies']/*[local-name()='group']"))
+        $unexpectedFrameworkGroups = @($dependencyGroups | Where-Object {
+            $targetFramework = $_.GetAttribute('targetFramework')
+            -not [string]::IsNullOrWhiteSpace($targetFramework) -and $targetFramework -ne 'net10.0'
+        })
+        if ($unexpectedFrameworkGroups.Count -ne 0) {
+            $frameworks = $unexpectedFrameworkGroups | ForEach-Object { $_.GetAttribute('targetFramework') }
+            throw "Package contains unexpected dependency framework groups: $($frameworks -join ', ')."
+        }
+
+        $legacyFrameworkEntries = @($archive.Entries | Where-Object FullName -Like 'lib/net9.0/*')
+        if ($legacyFrameworkEntries.Count -ne 0) {
+            throw 'Package must not contain legacy net9.0 assets.'
+        }
+
         foreach ($requiredEntry in @('README.md', 'LICENSE', 'lib/net10.0/TripleG3.P2P.dll')) {
             if ($null -eq $archive.GetEntry($requiredEntry)) {
                 throw "Package is missing $requiredEntry."
@@ -102,6 +131,24 @@ try {
     }
     finally {
         $archive.Dispose()
+    }
+
+    $symbolArchive = [System.IO.Compression.ZipFile]::OpenRead($symbolPackage.FullName)
+    try {
+        $symbolPdbEntries = @($symbolArchive.Entries | Where-Object FullName -Like 'lib/*.pdb')
+        if ($symbolPdbEntries.Count -eq 0) {
+            throw 'Symbols package does not contain any PDB files under lib/.'
+        }
+
+        foreach ($pdbEntry in $symbolPdbEntries) {
+            $matchingDll = [System.IO.Path]::ChangeExtension($pdbEntry.FullName, '.dll')
+            if (-not $mainPackageEntries.ContainsKey($matchingDll)) {
+                throw "Symbols package entry '$($pdbEntry.FullName)' has no matching '$matchingDll' in the main package."
+            }
+        }
+    }
+    finally {
+        $symbolArchive.Dispose()
     }
 
     $assembly = [System.Reflection.Assembly]::LoadFile($assemblyPath)

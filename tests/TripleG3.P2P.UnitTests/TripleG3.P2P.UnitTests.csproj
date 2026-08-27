@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\TripleG3.P2P\TripleG3.P2P.csproj" />
+    <ProjectReference Include="..\..\src\TripleG3.P2P.McpServer\TripleG3.P2P.McpServer.csproj" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>
