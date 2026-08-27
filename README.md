@@ -272,7 +272,7 @@ await Task.Delay(Timeout.InfiniteTimeSpan);
 
 ```
 
-## Alice-facing transport APIs
+## Host-facing transport APIs
 
 `TripleG3.P2P` exposes transport-only primitives that a host such as Alice can map into its own
 authorization, workflow, and UI state services:
@@ -292,6 +292,25 @@ authorization, workflow, and UI state services:
 
 Production callers must supply an authenticated encryption/channel implementation before accepting
 untrusted user traffic. `NoOpCipher` and test ciphers are not appropriate for deployed traffic.
+
+### Connected device hub
+
+`ConnectedDeviceHub<TDeviceDescriptor, TConnectionRoute, TStreamDescriptor>` is a generic in-memory
+connection and routing projection. It does not open sockets or publish messages itself. Hosts add or
+remove already-trusted device connections, query immutable membership snapshots, and publish the
+returned dispatch plans using their selected transport.
+
+The hub provides:
+
+- stable device IDs paired with replaceable connection IDs;
+- revisioned join, graceful-leave, and disconnect changes;
+- current-device queries and stale-route detection through revocation tokens;
+- direct and all-device routing for opaque host messages;
+- transport-neutral live-session offer, answer, start, stop, and failure control;
+- automatic live-session failure when a participating connection leaves or is replaced.
+
+The host owns authentication, authorization, approval, persistence, request and notification queues,
+tool execution, media capture and rendering, network publication, and the live-session data plane.
 
 High-performance, attribute-driven peer-to-peer messaging for .NET 10 / MAUI apps over UDP and TCP. Ship strongly-typed messages (records / classes / primitives / strings) with a tiny 8-byte header and pluggable serialization strategy.
 
