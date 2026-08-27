@@ -604,15 +604,7 @@ internal sealed class PeerTransferSession : IPeerTransferSession
             throw new InvalidDataException("The peer transfer data frame does not belong to an active inbound transfer.");
         }
 
-        if (!operation.TryReceiveData(frame.Payload))
-        {
-            operation.Fail("The inbound payload handler did not consume data fast enough.");
-            await SendControlAsync(
-                PeerTransferFrameKind.TransferFailed,
-                frame.TransferId,
-                PeerTransferWireProtocol.SerializeControl(new PeerTransferFailurePayload("The inbound payload handler did not consume data fast enough."), options.MaximumControlPayloadBytes),
-                cancellationToken).ConfigureAwait(false);
-        }
+        await operation.ReceiveDataAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
     }
 
     private void HandleSenderCompleted(PeerTransferFrame frame)
@@ -1253,23 +1245,19 @@ internal sealed class PeerTransferSession : IPeerTransferSession
             }
         }
 
-        public bool TryReceiveData(ReadOnlyMemory<byte> data)
+        public async ValueTask ReceiveDataAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
         {
             lock (operationGate)
             {
                 if (snapshot.IsTerminal)
                 {
-                    return true;
+                    return;
                 }
             }
 
-            if (!inboundData.Writer.TryWrite(data.ToArray()))
-            {
-                return false;
-            }
-
+            using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, transferCancellation.Token);
+            await inboundData.Writer.WriteAsync(data.ToArray(), linked.Token).ConfigureAwait(false);
             AddTransferredBytes(data.Length);
-            return true;
         }
 
         public void MarkSenderCompleted()
